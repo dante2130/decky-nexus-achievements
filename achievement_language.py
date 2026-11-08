@@ -1,0 +1,94 @@
+"""Read localized achievement text through the signed-in Nexus backend."""
+import asyncio
+import json
+import os
+import pwd
+import shutil
+from pathlib import Path
+
+LANGUAGES = {
+    "": "Original (saved by Nexus)",
+    "en-US": "English", "uk-UA": "Українська", "ru-RU": "Русский",
+    "de-DE": "Deutsch", "fr-FR": "Français", "es-ES": "Español",
+    "it-IT": "Italiano", "pt-BR": "Português (Brasil)", "pl-PL": "Polski",
+    "cs-CZ": "Čeština", "ja-JP": "日本語", "ko-KR": "한국어",
+    "zh-CN": "简体中文", "zh-TW": "繁體中文",
+}
+MAX_OUTPUT = 4 * 1024 * 1024
+
+
+def backend_command(home: Path) -> tuple[list[str], dict[str, str]]:
+    # Execute as the Deck user so the backend uses their existing sign-in.
+    config = home / ".config"
+    pointer = json.loads((config / "xodus-nexus/xodus-backends/current.json").read_text())
+    binary = Path(pointer["binaryPath"])
+    if not binary.is_absolute() or not binary.is_file():
+        raise ValueError("Nexus achievement backend is not installed.")
+    owner = pwd.getpwuid(home.stat().st_uid)
+    command = [str(binary)]
+    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(config))
+    if os.geteuid() != owner.pw_uid:
+        runuser = shutil.which("runuser") or "/usr/sbin/runuser"
+        command = [runuser, "-u", owner.pw_name, "--", "env",
+                   f"HOME={home}", f"XDG_CONFIG_HOME={config}", *command]
+    return command, env
+
+
+async def run_bounded(command: list[str], env: dict[str, str]) -> tuple[int, bytes]:
+    process = await asyncio.create_subprocess_exec(
+        *command, env=env, stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    try:
+        async def read():
+            output = bytearray()
+            while chunk := await process.stdout.read(65536):
+                output.extend(chunk)
+                if len(output) > MAX_OUTPUT:
+                    raise ValueError("Achievement response is too large.")
+            return await process.wait(), bytes(output)
+        return await asyncio.wait_for(read(), 40)
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+
+
+def localized_text(raw: bytes, title_id: str) -> dict[str, tuple[str, str]]:
+    data = json.loads(raw)
+    if (not isinstance(data, dict) or data.get("schema") != 1
+            or data.get("titleId") != title_id or not isinstance(data.get("items"), list)
+            or len(data["items"]) > 500):
+        raise ValueError("Invalid localized achievement response.")
+    result = {}
+    for item in data["items"]:
+        if not isinstance(item, dict):
+            raise ValueError("Invalid localized achievement.")
+        key, name, description = item.get("id"), item.get("name"), item.get("description")
+        if (not isinstance(key, str) or not key or key in result
+                or not isinstance(name, str) or not name or len(name) > 256
+                or not isinstance(description, str) or len(description) > 1500):
+            raise ValueError("Invalid localized achievement text.")
+        result[key] = (name, description)
+    return result
+
+
+async def translate_title(home: Path, detail: dict, language: str) -> dict:
+    if language not in LANGUAGES:
+        raise ValueError("Unsupported achievement language.")
+    if not language or not detail.get("ok"):
+        return detail
+    title_id = detail["titleId"]
+    if not title_id.isascii() or not title_id.isdecimal() or not 0 < int(title_id) <= 0xffffffff:
+        raise ValueError("Language selection requires a numeric Xbox title ID.")
+    command, env = backend_command(home)
+    code, help_text = await run_bounded([*command, "achievements", "--help"], env)
+    if code or b"--language" not in help_text:
+        raise ValueError("Update the Nexus backend to a version supporting achievement languages, or select Original.")
+    code, raw = await run_bounded([*command, "achievements", title_id, "--json", "--language", language], env)
+    if code:
+        raise ValueError("Could not load this language from Xbox. Check your Nexus sign-in and connection.")
+    text = localized_text(raw, title_id)
+    # Keep snapshot progress, unlock state, and secret visibility authoritative.
+    items = [{**item, **({"name": text[item["id"]][0], "description": text[item["id"]][1]}
+                        if item["id"] in text else {})} for item in detail["achievements"]]
+    return {**detail, "achievements": items}
