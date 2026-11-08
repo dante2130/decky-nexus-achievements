@@ -74,5 +74,10 @@
   "Mythic progress is unavailable for this game.": "Прогресс мифического достижения для этой игры недоступен.",
   "Update the Nexus achievement backend for Mythic support.": "Обновите серверную часть достижений Nexus для поддержки мифических достижений.",
   "Mythic achievements only": "Только достижения для мифического",
-  "Turn off to show all achievements.": "Выключите, чтобы показать все достижения."
+  "Turn off to show all achievements.": "Выключите, чтобы показать все достижения.",
+  "Achievement set": "Набор достижений",
+  "Original": "Основная игра",
+  "Loading achievement set…": "Загрузка набора достижений…",
+  "Rare": "Редкое",
+  "{percentage} of players unlocked": "Получено у {percentage} игроков"
 }

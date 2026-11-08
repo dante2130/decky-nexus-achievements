@@ -13,8 +13,9 @@ import {
 } from "@decky/ui";
 import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster } from "@decky/api";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { FaAward, FaEye, FaEyeSlash, FaPlay, FaTrophy } from "react-icons/fa";
+import { FaAward, FaGem, FaEye, FaEyeSlash, FaPlay, FaTrophy } from "react-icons/fa";
 import { SessionCache } from "./cache";
+import { matchesAchievementSet, type AchievementSet } from "./achievement-filters";
 import { getPluginLanguage, getPluginLanguagePreference, initializeSystemLanguage, setPluginLanguage, subscribeLanguage, translate, translateError, pluginLanguages, pluginLocales, type Message } from "./i18n";
 
 interface AchievementEvent {
@@ -67,6 +68,7 @@ interface Achievement {
   progress: number | null;
   secret: boolean;
   baseGame?: boolean;
+  rarity?: { percentage: number; category: "Rare" | "Common" };
 }
 
 interface MythicCompletion {
@@ -259,9 +261,10 @@ function MythicProgress({ detail, mythicOnly, onChange }: { detail: TitleDetail;
 
 type Filter = "all" | "unlocked" | "locked";
 type Sort = "name" | "gamerscore" | "date";
-interface GameViewSettings { filter: Filter; sort: Sort; }
+interface GameViewSettings { filter: Filter; sort: Sort; contentFilter: AchievementSet; }
+const DEFAULT_GAME_VIEW: GameViewSettings = { filter: "all", sort: "date", contentFilter: "all" };
 const getGameViewSettings = callable<[string], GameViewSettings>("get_game_view_settings");
-const setGameViewSettings = callable<[string, Filter, Sort], GameViewSettings>("set_game_view_settings");
+const setGameViewSettings = callable<[string, Filter, Sort, AchievementSet], GameViewSettings>("set_game_view_settings");
 const gameViewCache = new Map<string, GameViewSettings>();
 let rememberGameView = true;
 let gameViewPreferenceGeneration = 0;
@@ -275,7 +278,7 @@ let gameViewSaveQueue = Promise.resolve();
 function saveGameView(titleId: string, value: GameViewSettings): Promise<GameViewSettings> {
   const generation = gameViewPreferenceGeneration;
   const result = gameViewSaveQueue.then(() => rememberGameView && generation === gameViewPreferenceGeneration
-    ? setGameViewSettings(titleId, value.filter, value.sort) : value);
+    ? setGameViewSettings(titleId, value.filter, value.sort, value.contentFilter) : value);
   gameViewSaveQueue = result.then(() => undefined, () => undefined);
   return result;
 }
@@ -289,6 +292,11 @@ const SORTS = [
   { data: "name", label: "Name" },
   { data: "gamerscore", label: "Gamerscore" },
   { data: "date", label: "Unlock date" },
+];
+const ACHIEVEMENT_SETS = [
+  { data: "all", label: "All" },
+  { data: "original", label: "Original" },
+  { data: "addon", label: "Add-on" },
 ];
 
 const safeIcon = (url: string) => (/^https?:\/\//.test(url) ? url : "");
@@ -322,7 +330,7 @@ function GamerscoreIcon() {
 }
 
 function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boolean; onToggle: () => void }) {
-  const { t } = usePluginTranslation();
+  const { locale, t } = usePluginTranslation();
   const rowRef = useRef<HTMLDivElement>(null);
   const hasRevealButton = a.secret && !a.unlocked;
   const hidden = a.secret && !a.unlocked && !reveal;
@@ -334,6 +342,12 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: "bold" }}>{hidden ? t("Secret achievement") : name}</div>
         <div style={{ fontSize: 13, opacity: 0.8 }}>{hidden ? t("Keep playing to reveal this achievement.") : description}</div>
+        {a.rarity && Number.isFinite(a.rarity.percentage) && a.rarity.percentage >= 0 && a.rarity.percentage <= 100 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.8, marginTop: 4 }}>
+            {a.rarity.category === "Rare" && <><FaGem aria-hidden="true" /><span>{t("Rare")}</span><span>·</span></>}
+            <span>{t("{percentage} of players unlocked", { percentage: new Intl.NumberFormat(pluginLocales[locale], { style: "percent", maximumFractionDigits: 2 }).format(a.rarity.percentage / 100) })}</span>
+          </div>
+        )}
         {a.baseGame === false && <div style={{ fontSize: 11, opacity: 0.7 }}>{t("Add-on")}</div>}
         {!a.unlocked && a.progress !== null && !hidden && (
           <div style={{ marginTop: 4, height: 6, background: "rgba(255,255,255,0.15)", borderRadius: 3 }}>
@@ -374,7 +388,6 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
 function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () => void; tick: number }) {
   const { locale, t } = usePluginTranslation();
   const [languageRevision, setLanguageRevision] = useState(0);
-  const [mythicOnly, setMythicOnly] = useState(false);
   const [reveal, setReveal] = useState(false);
   const [grouped, setGrouped] = useState(false);
   const [groupError, setGroupError] = useState(false);
@@ -386,8 +399,8 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
   const toggleReveal = (v: boolean) => { setReveal(v); setOverrides({}); setShowSecrets(v).catch(() => {}); };
   const isRevealed = (a: Achievement) => overrides[a.id] ?? reveal;
   const [detail, setDetail] = useState<TitleDetail | null>(() => achievementCache.peek(achievementCacheKey(title)) ?? null);
-  const [view, setView] = useState<GameViewSettings>(() => (rememberGameView ? gameViewCache.get(title.titleId) : undefined) ?? { filter: "all", sort: "date" });
-  const { filter, sort } = view;
+  const [view, setView] = useState<GameViewSettings>(() => (rememberGameView ? gameViewCache.get(title.titleId) : undefined) ?? DEFAULT_GAME_VIEW);
+  const { filter, sort, contentFilter } = view;
   const [viewError, setViewError] = useState<Message | null>(null);
   const viewRevision = useRef(0);
   const viewMounted = useRef(false);
@@ -450,7 +463,7 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = (detail?.achievements ?? []).filter(a => {
-      if (mythicOnly && detail?.mythic && a.baseGame !== true) return false;
+      if (!matchesAchievementSet(a, contentFilter)) return false;
       if (filter === "unlocked" && !a.unlocked) return false;
       if (filter === "locked" && a.unlocked) return false;
       if (!q) return true;
@@ -462,7 +475,8 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
       if (sort === "date") return (y.unlockedAt ?? 0) - (x.unlockedAt ?? 0) || x.name.localeCompare(y.name);
       return x.name.localeCompare(y.name);
     });
-  }, [detail, filter, sort, query, reveal, overrides, mythicOnly]);
+  }, [detail, filter, sort, query, reveal, overrides, contentFilter]);
+  const membershipPending = contentFilter !== "all" && detail?.ok && !detail.mythic && !detail.mythicUnavailable;
 
   const groups: { label: "Unlocked" | "Locked" | null; items: Achievement[] }[] = grouped
     ? [{ label: "Unlocked", items: rows.filter(a => a.unlocked) }, { label: "Locked", items: rows.filter(a => !a.unlocked) }]
@@ -512,6 +526,8 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
       </div>
       <DropdownItem label={t("Filter")} rgOptions={FILTERS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={filter}
         onChange={o => updateView({ filter: o.data as Filter })} />
+      <DropdownItem label={t("Achievement set")} rgOptions={ACHIEVEMENT_SETS.map(option => ({ ...option, label: t(option.label as Message) }))}
+        selectedOption={contentFilter} onChange={option => updateView({ contentFilter: option.data as AchievementSet })} />
       <DropdownItem label={t("Sort by")} rgOptions={SORTS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={sort}
         onChange={o => updateView({ sort: o.data as Sort })} />
       {viewError && <div role="alert">{t(viewError)}</div>}
@@ -528,11 +544,13 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
       <div style={{ marginTop: 12 }}>
         <TextField label={t("Search")} value={query} onChange={e => setQuery(e.target.value)} />
       </div>
-      {detail?.ok && (detail.mythic || detail.mythicUnavailable) && <div style={{ marginTop: 12 }}><MythicProgress detail={detail} mythicOnly={mythicOnly} onChange={setMythicOnly} /></div>}
+      {detail?.ok && (detail.mythic || detail.mythicUnavailable) && <div style={{ marginTop: 12 }}><MythicProgress detail={detail}
+        mythicOnly={contentFilter === "original"} onChange={enabled => updateView({ contentFilter: enabled ? "original" : "all" })} /></div>}
       {!detail && <div style={{ padding: 16 }}>{t("Loading…")}</div>}
       {detail && !detail.ok && <div style={{ padding: 16 }}>{t("Could not load achievements ({error}).", { error: translateError(locale, detail.error) })}</div>}
       {detail?.languageError && <div role="alert" style={{ padding: 16 }}>{t("Showing original achievement text. {error}", { error: translateError(locale, detail.languageError) })}</div>}
-      {detail?.ok && rows.length === 0 && <div style={{ padding: 16, opacity: 0.7 }}>{t("No achievements match.")}</div>}
+      {membershipPending && <div role="status" style={{ padding: 16, opacity: 0.7 }}>{t("Loading achievement set…")}</div>}
+      {detail?.ok && !membershipPending && rows.length === 0 && <div style={{ padding: 16, opacity: 0.7 }}>{t("No achievements match.")}</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {groups.filter(group => group.items.length > 0).map(group => <div key={group.label || "all"}>
           {group.label && <h3 style={{ margin: "12px 0 8px" }}>{t(group.label)} ({group.items.length})</h3>}

@@ -266,7 +266,7 @@ class Plugin:
         if not valid_title_id(title_id):
             raise ValueError("Invalid title ID.")
         if not self.settings.get("remember_game_view_settings", True):
-            return {"filter": "all", "sort": "date"}
+            return {"filter": "all", "sort": "date", "contentFilter": "all"}
         games = self.settings.get("game_view_settings", {})
         value = games.get(title_id, {}) if isinstance(games, dict) else {}
         if not isinstance(value, dict):
@@ -274,14 +274,16 @@ class Plugin:
         return {
             "filter": value.get("filter") if value.get("filter") in ("all", "unlocked", "locked") else "all",
             "sort": value.get("sort") if value.get("sort") in ("name", "gamerscore", "date") else "date",
+            "contentFilter": value.get("contentFilter") if value.get("contentFilter") in ("all", "original", "addon") else "all",
         }
 
-    async def set_game_view_settings(self, title_id: str, filter_value: str, sort_value: str) -> Dict[str, str]:
+    async def set_game_view_settings(self, title_id: str, filter_value: str, sort_value: str, content_filter: str = "all") -> Dict[str, str]:
         if not valid_title_id(title_id):
             raise ValueError("Invalid title ID.")
-        if filter_value not in ("all", "unlocked", "locked") or sort_value not in ("name", "gamerscore", "date"):
+        if (filter_value not in ("all", "unlocked", "locked") or sort_value not in ("name", "gamerscore", "date")
+                or content_filter not in ("all", "original", "addon")):
             raise ValueError("Invalid game view settings.")
-        value = {"filter": filter_value, "sort": sort_value}
+        value = {"filter": filter_value, "sort": sort_value, "contentFilter": content_filter}
         if not self.settings.get("remember_game_view_settings", True):
             return value
         previous = self.settings

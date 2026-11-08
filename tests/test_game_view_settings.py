@@ -10,6 +10,35 @@ import main
 
 
 class GameViewSettingsTests(unittest.TestCase):
+    def test_original_mythic_and_addon_choices_persist_separately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_file = Path(directory) / "settings.json"
+            plugin = self.plugin()
+            plugin._settings_file = lambda: settings_file
+            asyncio.run(plugin.set_game_view_settings("42", "locked", "date", "original"))
+            asyncio.run(plugin.set_game_view_settings("43", "all", "gamerscore", "addon"))
+            restored = self.plugin()
+            restored._settings_file = lambda: settings_file
+            restored._load()
+            self.assertEqual(asyncio.run(restored.get_game_view_settings("42"))["contentFilter"], "original")
+            self.assertEqual(asyncio.run(restored.get_game_view_settings("43"))["contentFilter"], "addon")
+            asyncio.run(restored.set_remember_game_view_settings(False))
+            asyncio.run(restored.set_game_view_settings("42", "all", "name", "all"))
+            self.assertEqual(asyncio.run(restored.get_game_view_settings("42"))["contentFilter"], "all")
+            asyncio.run(restored.set_remember_game_view_settings(True))
+            self.assertEqual(asyncio.run(restored.get_game_view_settings("42"))["contentFilter"], "original")
+            asyncio.run(restored.set_game_view_settings("42", "locked", "date", "all"))
+            self.assertEqual(asyncio.run(restored.get_game_view_settings("42"))["contentFilter"], "all")
+
+    def test_legacy_records_default_to_all_and_invalid_sets_are_rejected(self):
+        plugin = self.plugin()
+        plugin.settings["game_view_settings"] = {"42": {"filter": "locked", "sort": "gamerscore"}}
+        self.assertEqual(asyncio.run(plugin.get_game_view_settings("42")), {"filter": "locked", "sort": "gamerscore", "contentFilter": "all"})
+        with patch.object(plugin, "_save") as save:
+            with self.assertRaises(ValueError):
+                asyncio.run(plugin.set_game_view_settings("42", "all", "date", "invalid"))
+            save.assert_not_called()
+
     def test_disabling_persistence_ignores_saved_choices_without_erasing_them(self):
         with tempfile.TemporaryDirectory() as directory:
             settings_file = Path(directory) / "settings.json"
@@ -17,7 +46,7 @@ class GameViewSettingsTests(unittest.TestCase):
             plugin._settings_file = lambda: settings_file
             asyncio.run(plugin.set_game_view_settings("42", "locked", "name"))
             asyncio.run(plugin.set_remember_game_view_settings(False))
-            self.assertEqual(asyncio.run(plugin.get_game_view_settings("42")), {"filter": "all", "sort": "date"})
+            self.assertEqual(asyncio.run(plugin.get_game_view_settings("42")), {"filter": "all", "sort": "date", "contentFilter": "all"})
             with patch.object(plugin, "_save") as save:
                 asyncio.run(plugin.set_game_view_settings("42", "unlocked", "gamerscore"))
                 save.assert_not_called()
@@ -26,7 +55,7 @@ class GameViewSettingsTests(unittest.TestCase):
             restored._load()
             self.assertFalse(restored.settings["remember_game_view_settings"])
             asyncio.run(restored.set_remember_game_view_settings(True))
-            self.assertEqual(asyncio.run(restored.get_game_view_settings("42")), {"filter": "locked", "sort": "name"})
+            self.assertEqual(asyncio.run(restored.get_game_view_settings("42")), {"filter": "locked", "sort": "name", "contentFilter": "all"})
 
     def test_failed_toggle_save_preserves_enabled_state(self):
         plugin = self.plugin()
@@ -45,16 +74,16 @@ class GameViewSettingsTests(unittest.TestCase):
             settings_file = Path(directory) / "settings.json"
             plugin = self.plugin()
             plugin._settings_file = lambda: settings_file
-            self.assertEqual(asyncio.run(plugin.get_game_view_settings("42")), {"filter": "all", "sort": "date"})
+            self.assertEqual(asyncio.run(plugin.get_game_view_settings("42")), {"filter": "all", "sort": "date", "contentFilter": "all"})
             asyncio.run(plugin.set_game_view_settings("42", "unlocked", "gamerscore"))
             asyncio.run(plugin.set_game_view_settings("43", "locked", "name"))
             asyncio.run(plugin.set_settings(False, 5000))
             restored = self.plugin()
             restored._settings_file = lambda: settings_file
             restored._load()
-            self.assertEqual(asyncio.run(restored.get_game_view_settings("42")), {"filter": "unlocked", "sort": "gamerscore"})
-            self.assertEqual(asyncio.run(restored.get_game_view_settings("43")), {"filter": "locked", "sort": "name"})
-            self.assertEqual(asyncio.run(restored.get_game_view_settings("44")), {"filter": "all", "sort": "date"})
+            self.assertEqual(asyncio.run(restored.get_game_view_settings("42")), {"filter": "unlocked", "sort": "gamerscore", "contentFilter": "all"})
+            self.assertEqual(asyncio.run(restored.get_game_view_settings("43")), {"filter": "locked", "sort": "name", "contentFilter": "all"})
+            self.assertEqual(asyncio.run(restored.get_game_view_settings("44")), {"filter": "all", "sort": "date", "contentFilter": "all"})
 
     def test_invalid_ids_and_choices_are_rejected_without_writing(self):
         plugin = self.plugin()
@@ -70,12 +99,12 @@ class GameViewSettingsTests(unittest.TestCase):
         plugin = self.plugin()
         for value in [None, [], {"42": None}, {"42": {"filter": "bad", "sort": "bad"}}]:
             plugin.settings["game_view_settings"] = value
-            self.assertEqual(asyncio.run(plugin.get_game_view_settings("42")), {"filter": "all", "sort": "date"})
+            self.assertEqual(asyncio.run(plugin.get_game_view_settings("42")), {"filter": "all", "sort": "date", "contentFilter": "all"})
 
     def test_failed_save_retains_previous_settings(self):
         plugin = self.plugin()
-        plugin.settings["game_view_settings"] = {"42": {"filter": "locked", "sort": "name"}}
+        plugin.settings["game_view_settings"] = {"42": {"filter": "locked", "sort": "name", "contentFilter": "all"}}
         with patch.object(plugin, "_save", side_effect=OSError("read only")):
             with self.assertRaises(OSError):
                 asyncio.run(plugin.set_game_view_settings("42", "all", "date"))
-        self.assertEqual(asyncio.run(plugin.get_game_view_settings("42")), {"filter": "locked", "sort": "name"})
+        self.assertEqual(asyncio.run(plugin.get_game_view_settings("42")), {"filter": "locked", "sort": "name", "contentFilter": "all"})

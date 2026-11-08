@@ -74,5 +74,10 @@
   "Mythic progress is unavailable for this game.": "Прогрес міфічного досягнення для цієї гри недоступний.",
   "Update the Nexus achievement backend for Mythic support.": "Оновіть серверну частину досягнень Nexus для підтримки міфічних досягнень.",
   "Mythic achievements only": "Лише досягнення для міфічного",
-  "Turn off to show all achievements.": "Вимкніть, щоб показати всі досягнення."
+  "Turn off to show all achievements.": "Вимкніть, щоб показати всі досягнення.",
+  "Achievement set": "Набір досягнень",
+  "Original": "Основна гра",
+  "Loading achievement set…": "Завантаження набору досягнень…",
+  "Rare": "Рідкісне",
+  "{percentage} of players unlocked": "Здобули {percentage} гравців"
 }

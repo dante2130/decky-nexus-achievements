@@ -53,6 +53,12 @@ Use **Remember game filters and sorting** immediately before **Plugin language**
 in the main panel to turn this behavior on or off. It is enabled by default.
 When disabled, each reopened game starts with the defaults and filter/sort changes
 are not saved. Existing saved choices are retained for when the toggle is enabled again.
+The **Achievement set** filter offers **All**, **Original**, and **Add-on**,
+independently of the unlocked/locked filter. It shares its saved state with the
+Mythic-only toggle: enabled selects Original, disabled selects All. Selecting
+Add-on switches Mythic-only off. These choices also obey the remember-settings
+toggle and restore per game after a restart. Achievements with unknown membership
+are shown in All but are not guessed to belong to either set.
 
 The viewer keeps game and achievement lists in memory for the plugin session.
 Reopening a list displays cached rows immediately. Achievement responses are
@@ -159,3 +165,5 @@ Interface localization tests: `npm run test:i18n`.
 
 - Toasts appear when the plugin sees the line (about 0.5 s polling).
 - Remote icons need network access; otherwise a trophy icon is shown.
+
+Achievement rows show Xbox-reported unlock percentages and a diamond badge for Rare achievements when metadata is available. Missing rarity is left blank.

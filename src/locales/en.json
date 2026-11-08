@@ -74,5 +74,10 @@
   "Mythic progress is unavailable for this game.": "Mythic progress is unavailable for this game.",
   "Update the Nexus achievement backend for Mythic support.": "Update the Nexus achievement backend for Mythic support.",
   "Mythic achievements only": "Mythic achievements only",
-  "Turn off to show all achievements.": "Turn off to show all achievements."
+  "Turn off to show all achievements.": "Turn off to show all achievements.",
+  "Achievement set": "Achievement set",
+  "Original": "Original",
+  "Loading achievement set…": "Loading achievement set…",
+  "Rare": "Rare",
+  "{percentage} of players unlocked": "{percentage} of players unlocked"
 }
