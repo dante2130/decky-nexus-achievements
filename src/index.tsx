@@ -120,6 +120,16 @@ function Icon({ url }: { url: string }) {
     : <div style={{ width: 56, height: 56, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><FaTrophy size={28} /></div>;
 }
 
+function GamerscoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="1em" height="1em" role="img" aria-label="Gamerscore"
+      style={{ display: "inline-block", verticalAlign: "-0.15em", flexShrink: 0 }}>
+      <circle cx="12" cy="12" r="11" fill="#107c10" />
+      <path d="M16 8.5a5 5 0 1 0 .5 6.5V12H12" fill="none" stroke="#fff" strokeWidth="2.2" />
+    </svg>
+  );
+}
+
 function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boolean; onToggle: () => void }) {
   const hidden = a.secret && !a.unlocked && !reveal;
   const revealed = a.secret && !a.unlocked && reveal;
@@ -140,7 +150,7 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
         {!a.unlocked && a.progress !== null && !hidden && <div style={{ fontSize: 12, opacity: 0.7 }}>{a.progress}%</div>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-        <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}>{hidden ? "? G" : `${a.gamerscore} G`}</div>
+        <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}>{hidden ? "?" : a.gamerscore} <GamerscoreIcon /></div>
         {a.secret && !a.unlocked && (
           <DialogButton
             aria-label={reveal ? "Hide secret achievement" : "Show secret achievement"}
@@ -197,7 +207,7 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
       <ButtonItem layout="below" onClick={onBack}>← All titles</ButtonItem>
       <h2 style={{ margin: "8px 0" }}>{title.titleName}</h2>
       <div style={{ opacity: 0.8, marginBottom: 8 }}>
-        {title.unlocked}/{title.total} unlocked • {title.gamerscore}/{title.gamerscoreTotal} G
+        {title.unlocked}/{title.total} unlocked • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon />
       </div>
       <DropdownItem label="Filter" rgOptions={FILTERS} selectedOption={filter}
         onChange={o => setFilter(o.data as Filter)} />
@@ -256,7 +266,7 @@ function AchievementsPage() {
             <ButtonItem key={t.titleId} layout="below" onClick={() => setSelected(t.titleId)}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
                 <span>{t.titleName}</span>
-                <span style={{ opacity: 0.8 }}>{t.unlocked}/{t.total} • {t.gamerscore}/{t.gamerscoreTotal} G</span>
+                <span style={{ opacity: 0.8 }}>{t.unlocked}/{t.total} • {t.gamerscore}/{t.gamerscoreTotal} <GamerscoreIcon /></span>
               </div>
             </ButtonItem>
           ))}
