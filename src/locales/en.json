@@ -64,5 +64,15 @@
   "Could not save game view settings.": "Could not save game view settings.",
   "Remember game filters and sorting": "Remember game filters and sorting",
   "Save filter and sort choices separately for each game.": "Save filter and sort choices separately for each game.",
-  "Could not save the game settings preference.": "Could not save the game settings preference."
+  "Could not save the game settings preference.": "Could not save the game settings preference.",
+  "Mythic": "Mythic",
+  "Mythic achievement": "Mythic achievement",
+  "Mythic achievement unlocked": "Mythic achievement unlocked",
+  "{unlocked}/{total} original achievements": "{unlocked}/{total} original achievements",
+  "Unlocked all {total} original achievements in {game}.": "Unlocked all {total} original achievements in {game}.",
+  "Add-on": "Add-on",
+  "Mythic progress is unavailable for this game.": "Mythic progress is unavailable for this game.",
+  "Update the Nexus achievement backend for Mythic support.": "Update the Nexus achievement backend for Mythic support.",
+  "Mythic achievements only": "Mythic achievements only",
+  "Turn off to show all achievements.": "Turn off to show all achievements."
 }

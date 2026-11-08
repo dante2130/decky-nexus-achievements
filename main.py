@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 # Decky loads main.py by filename without adding the plugin directory to sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from achievement_language import LANGUAGES, translate_title
+from mythic import MythicTracker
 
 try:
     import decky
@@ -341,12 +342,40 @@ class Plugin:
             raise
         return self.settings["group_achievements"]
 
+    async def get_saved_title_achievements(self, title_id: str) -> Dict[str, Any]:
+        return get_title(title_id)
+
     async def get_title_achievements(self, title_id: str) -> Dict[str, Any]:
         detail = get_title(title_id)
         try:
-            return await translate_title(user_home(), detail, self.settings.get("achievement_language", ""))
+            result = await translate_title(user_home(), detail, self.settings.get("achievement_language", ""))
+            account = result.pop("_mythic_account", "")
+            if result.get("mythic"):
+                if not hasattr(self, "_mythic_tracker"):
+                    self._mythic_tracker = MythicTracker()
+                newly_earned = self._mythic_tracker.observe(account, title_id, result["mythic"])
+                if newly_earned and self.settings["enabled"]:
+                    await decky.emit("mythic", {"titleId": title_id, "titleName": result.get("titleName", title_id),
+                                                "mythic": result["mythic"]})
+            return result
         except Exception as error:
             return {**detail, "languageError": str(error) or "Could not load the selected language."}
+
+    def _schedule_mythic_refresh(self, title_id: str):
+        if not valid_title_id(title_id):
+            return
+        if not hasattr(self, "_mythic_jobs"):
+            self._mythic_jobs = {}
+        if title_id in self._mythic_jobs or len(self._mythic_jobs) >= 2:
+            return
+
+        async def refresh():
+            try:
+                await asyncio.sleep(1.5)
+                await self.get_title_achievements(title_id)
+            finally:
+                self._mythic_jobs.pop(title_id, None)
+        self._mythic_jobs[title_id] = asyncio.create_task(refresh())
 
     async def test_notification(self, locale: str = "") -> None:
         texts = {
@@ -369,6 +398,7 @@ class Plugin:
                 for event in tailer.poll():
                     if self.settings["enabled"]:
                         await decky.emit("achievement", event)
+                        self._schedule_mythic_refresh(event.get("titleId", ""))
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # keep tailing on transient errors
@@ -391,3 +421,8 @@ class Plugin:
     async def _unload(self):
         if self.task:
             self.task.cancel()
+        jobs = list(getattr(self, "_mythic_jobs", {}).values())
+        for job in jobs:
+            job.cancel()
+        if jobs:
+            await asyncio.gather(*jobs, return_exceptions=True)

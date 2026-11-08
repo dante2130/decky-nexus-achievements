@@ -34,11 +34,14 @@ class LanguageTests(unittest.TestCase):
              "unlocked": False, "secret": True, "gamerscore": 10},
             {"id": "scid:2", "name": "Second", "description": "Keep this"}]}
 
-    def test_original_does_not_run_backend(self):
+    def test_original_keeps_saved_text_and_skips_online_reads_with_older_backend(self):
         detail = self.detail()
-        with patch.object(language, "backend_command") as command:
-            self.assertEqual(asyncio.run(language.translate_title(Path("/tmp"), detail, "")), detail)
-            command.assert_not_called()
+        runner = AsyncMock(return_value=(0, b"--language"))
+        with patch.object(language, "backend_command", return_value=(["/backend"], {})), patch.object(language, "run_bounded", runner):
+            result = asyncio.run(language.translate_title(Path("/tmp"), detail, ""))
+        self.assertEqual(result["achievements"], detail["achievements"])
+        self.assertEqual(result["mythicUnavailable"], "backend")
+        self.assertEqual(runner.await_count, 1)
 
     def test_localized_text_preserves_progress_and_missing_translations(self):
         raw = json.dumps({"schema": 1, "titleId": "42", "items": [

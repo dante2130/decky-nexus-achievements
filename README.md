@@ -12,7 +12,8 @@ game -> nexus-xgameruntime (guest) -> xodus-nexus bridge (host)
 
 - `nexus-xgameruntime` advertises the `achievement-notify-v1` capability when it can report unlocks. The runtime passes `NEXUS_INVITE_PORT`/`NEXUS_INVITE_KEY` and `XODUS_BRIDGE_*` to the game process, so the guest can reach the host bridge.
 - `xodus-nexus` (the host side) appends one JSON line per unlock to the event file.
-- This plugin only reads that file; it never talks to the game.
+- The plugin reads that file and snapshots; optional Xbox metadata is read through
+  the signed-in Nexus backend. It never writes achievement progress or talks to the game.
 
 Event line format:
 
@@ -26,7 +27,7 @@ Malformed lines and other `type` values are ignored. The plugin starts at the en
 
 1. Install [Decky Loader](https://decky.xyz) on the Deck.
 2. Build: `npm install && npm run build`.
-3. Copy this folder (with `dist/`, `main.py`, `achievement_language.py`, `plugin.json`, `package.json`, `LICENSE`) to `~/homebrew/plugins/decky-nexus-achievements/` (needs root to write). When extracting an archive, use `sudo tar --no-same-owner` and then `sudo chown -R root:root ~/homebrew/plugins/decky-nexus-achievements` to avoid importing a macOS UID. Keep backups outside `~/homebrew/plugins/`. Restart Decky: `sudo systemctl restart plugin_loader`.
+3. Copy this folder (with `dist/`, `main.py`, `achievement_language.py`, `mythic.py`, `plugin.json`, `package.json`, `LICENSE`) to `~/homebrew/plugins/decky-nexus-achievements/` (needs root to write). When extracting an archive, use `sudo tar --no-same-owner` and then `sudo chown -R root:root ~/homebrew/plugins/decky-nexus-achievements` to avoid importing a macOS UID. Keep backups outside `~/homebrew/plugins/`. Restart Decky: `sudo systemctl restart plugin_loader`.
 4. Open the Quick Access menu (`...`), then Nexus Achievements, then "Send test notification".
 
 ## Achievements viewer
@@ -87,7 +88,8 @@ those use the separate achievement-language selector below.
 Choose **Achievement language** in the plugin panel or a title's achievement
 page. This changes achievement names and descriptions in the viewer; menus and
 notification text are unchanged. The choice is saved across restarts. **Original
-(saved by Nexus)** reads the existing snapshot without an online request.
+(saved by Nexus)** preserves the snapshot's names and descriptions. The plugin
+may still fetch Mythic completion metadata when a compatible backend is installed.
 Other languages fetch localized text from Xbox through the signed-in Nexus
 backend. Xbox may fall back to another language when a game has no translation.
 Unlock state, score, and secret visibility continue to use the original snapshot.
@@ -107,6 +109,33 @@ under `~/.local/share/nexus-launcher/achievement-backend/` (containing `xodus-cl
 and `xodus-service`). The plugin prefers that copy, so language support can be
 installed without changing the launcher's managed backend. Failed localized reads
 show a warning while preserving the saved achievement list.
+
+### Mythic achievements
+
+The viewer shows progress toward the original game's Mythic achievement below
+the search field and above the achievement groups, with an earned badge and cover frame.
+The **Mythic achievements only** toggle inside that card switches between original
+achievements required for Mythic and the full list. Search, filters, sorting, and
+grouping continue to apply. The toggle is disabled when membership data is unavailable.
+Achievements outside the original set are marked **Add-on**. Game-list badges
+appear after the game's Mythic metadata has been loaded during the plugin session.
+
+Mythic status comes from Xbox's authoritative `BaseGame` completion group, using
+achievement contract version 6 through `xodus-cli achievements TITLE_ID --json
+--include-mythic`. Missing group data is shown as unavailable; total gamerscore
+or completing every visible achievement never substitutes for Xbox's status.
+DLC and title-update achievements are excluded according to Xbox's membership list.
+
+The first observation of an already-earned Mythic seeds history silently. A later
+server-reported transition to earned triggers a special notification, once per
+account, game, and group during the session. Normal unlock events schedule a
+background metadata refresh without delaying achievement notifications. The global
+notification switch applies to Mythic notifications too. Offline and older-backend
+fallbacks preserve saved achievement rows.
+
+The required backend is built in [dante2130/nexus-backend](https://github.com/dante2130/nexus-backend).
+Install the compatible helper under the separate achievement-backend directory
+described above. This feature never awards or writes achievements on Xbox.
 
 ## Configuration
 

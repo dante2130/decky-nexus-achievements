@@ -64,5 +64,15 @@
   "Could not save game view settings.": "Не удалось сохранить настройки списка для этой игры.",
   "Remember game filters and sorting": "Запоминать фильтры и сортировку игр",
   "Save filter and sort choices separately for each game.": "Сохранять фильтр и сортировку отдельно для каждой игры.",
-  "Could not save the game settings preference.": "Не удалось сохранить настройку запоминания параметров игр."
+  "Could not save the game settings preference.": "Не удалось сохранить настройку запоминания параметров игр.",
+  "Mythic": "Мифическое достижение",
+  "Mythic achievement": "Мифическое достижение",
+  "Mythic achievement unlocked": "Получено мифическое достижение",
+  "{unlocked}/{total} original achievements": "Исходные достижения: {unlocked}/{total}",
+  "Unlocked all {total} original achievements in {game}.": "Получены все {total} исходных достижений в игре {game}.",
+  "Add-on": "Дополнение",
+  "Mythic progress is unavailable for this game.": "Прогресс мифического достижения для этой игры недоступен.",
+  "Update the Nexus achievement backend for Mythic support.": "Обновите серверную часть достижений Nexus для поддержки мифических достижений.",
+  "Mythic achievements only": "Только достижения для мифического",
+  "Turn off to show all achievements.": "Выключите, чтобы показать все достижения."
 }

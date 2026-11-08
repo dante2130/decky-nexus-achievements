@@ -64,5 +64,15 @@
   "Could not save game view settings.": "Не вдалося зберегти налаштування списку для цієї гри.",
   "Remember game filters and sorting": "Запам’ятовувати фільтри й сортування ігор",
   "Save filter and sort choices separately for each game.": "Зберігати фільтр і сортування окремо для кожної гри.",
-  "Could not save the game settings preference.": "Не вдалося зберегти налаштування запам’ятовування параметрів ігор."
+  "Could not save the game settings preference.": "Не вдалося зберегти налаштування запам’ятовування параметрів ігор.",
+  "Mythic": "Міфічне досягнення",
+  "Mythic achievement": "Міфічне досягнення",
+  "Mythic achievement unlocked": "Здобуто міфічне досягнення",
+  "{unlocked}/{total} original achievements": "Початкові досягнення: {unlocked}/{total}",
+  "Unlocked all {total} original achievements in {game}.": "Здобуто всі {total} початкових досягнень у грі {game}.",
+  "Add-on": "Доповнення",
+  "Mythic progress is unavailable for this game.": "Прогрес міфічного досягнення для цієї гри недоступний.",
+  "Update the Nexus achievement backend for Mythic support.": "Оновіть серверну частину досягнень Nexus для підтримки міфічних досягнень.",
+  "Mythic achievements only": "Лише досягнення для міфічного",
+  "Turn off to show all achievements.": "Вимкніть, щоб показати всі досягнення."
 }
