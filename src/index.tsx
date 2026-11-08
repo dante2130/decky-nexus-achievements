@@ -124,8 +124,8 @@ function GamerscoreIcon() {
   return (
     <svg viewBox="0 0 24 24" width="1em" height="1em" role="img" aria-label="Gamerscore"
       style={{ display: "inline-block", verticalAlign: "-0.15em", flexShrink: 0 }}>
-      <circle cx="12" cy="12" r="11" fill="#107c10" />
-      <path d="M16 8.5a5 5 0 1 0 .5 6.5V12H12" fill="none" stroke="#fff" strokeWidth="2.2" />
+      <circle cx="12" cy="12" r="11" style={{ fill: "#fff" }} />
+      <path d="M16 8.5a5 5 0 1 0 .5 6.5V12H12" style={{ fill: "none", stroke: "#182726", strokeWidth: 2.2 }} />
     </svg>
   );
 }
