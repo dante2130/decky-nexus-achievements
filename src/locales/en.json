@@ -56,5 +56,13 @@
   "not found": "not found",
   "invalid titleId": "invalid titleId",
   "unreadable": "unreadable",
-  "Unexpected error": "Unexpected error"
+  "Unexpected error": "Unexpected error",
+  "Group achievements": "Group achievements",
+  "Separate unlocked and locked achievements.": "Separate unlocked and locked achievements.",
+  "Could not save achievement grouping.": "Could not save achievement grouping.",
+  "Could not load game view settings.": "Could not load game view settings.",
+  "Could not save game view settings.": "Could not save game view settings.",
+  "Remember game filters and sorting": "Remember game filters and sorting",
+  "Save filter and sort choices separately for each game.": "Save filter and sort choices separately for each game.",
+  "Could not save the game settings preference.": "Could not save the game settings preference."
 }

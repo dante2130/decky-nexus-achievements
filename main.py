@@ -22,7 +22,7 @@ except ImportError:  # unit tests run outside Decky Loader
 DEFAULT_RELATIVE = ".local/share/nexus-launcher/achievement-events.jsonl"
 POLL_SECONDS = 0.5
 MAX_LINE = 64 * 1024
-DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": "", "plugin_language": "system"}
+DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": "", "plugin_language": "system", "group_achievements": False, "game_view_settings": {}, "remember_game_view_settings": True}
 
 
 def user_home() -> Path:
@@ -261,6 +261,48 @@ class Plugin:
     async def get_running_title(self) -> Optional[Dict[str, Any]]:
         return get_running_title()
 
+    async def get_game_view_settings(self, title_id: str) -> Dict[str, str]:
+        if not valid_title_id(title_id):
+            raise ValueError("Invalid title ID.")
+        if not self.settings.get("remember_game_view_settings", True):
+            return {"filter": "all", "sort": "date"}
+        games = self.settings.get("game_view_settings", {})
+        value = games.get(title_id, {}) if isinstance(games, dict) else {}
+        if not isinstance(value, dict):
+            value = {}
+        return {
+            "filter": value.get("filter") if value.get("filter") in ("all", "unlocked", "locked") else "all",
+            "sort": value.get("sort") if value.get("sort") in ("name", "gamerscore", "date") else "date",
+        }
+
+    async def set_game_view_settings(self, title_id: str, filter_value: str, sort_value: str) -> Dict[str, str]:
+        if not valid_title_id(title_id):
+            raise ValueError("Invalid title ID.")
+        if filter_value not in ("all", "unlocked", "locked") or sort_value not in ("name", "gamerscore", "date"):
+            raise ValueError("Invalid game view settings.")
+        value = {"filter": filter_value, "sort": sort_value}
+        if not self.settings.get("remember_game_view_settings", True):
+            return value
+        previous = self.settings
+        games = previous.get("game_view_settings", {})
+        self.settings = {**previous, "game_view_settings": {**(games if isinstance(games, dict) else {}), title_id: value}}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return value
+
+    async def set_remember_game_view_settings(self, enabled: bool) -> bool:
+        previous = self.settings
+        self.settings = {**previous, "remember_game_view_settings": bool(enabled)}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return self.settings["remember_game_view_settings"]
+
     async def list_titles(self) -> Dict[str, Any]:
         try:
             return list_titles()
@@ -288,6 +330,16 @@ class Plugin:
             self.settings = previous
             raise
         return language
+
+    async def set_group_achievements(self, enabled: bool) -> bool:
+        previous = self.settings
+        self.settings = {**previous, "group_achievements": bool(enabled)}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return self.settings["group_achievements"]
 
     async def get_title_achievements(self, title_id: str) -> Dict[str, Any]:
         detail = get_title(title_id)

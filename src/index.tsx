@@ -12,7 +12,7 @@ import {
   staticClasses,
 } from "@decky/ui";
 import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster } from "@decky/api";
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { FaEye, FaEyeSlash, FaPlay, FaTrophy } from "react-icons/fa";
 import { SessionCache } from "./cache";
 import { getPluginLanguage, getPluginLanguagePreference, initializeSystemLanguage, setPluginLanguage, subscribeLanguage, translate, translateError, pluginLanguages, pluginLocales, type Message } from "./i18n";
@@ -36,6 +36,8 @@ interface Settings {
   show_secrets?: boolean;
   achievement_language?: string;
   plugin_language?: string;
+  group_achievements?: boolean;
+  remember_game_view_settings?: boolean;
   resolved_path?: string;
 }
 
@@ -82,6 +84,7 @@ const gamesCache = new SessionCache<TitleSummary[]>();
 const achievementCacheKey = (title: TitleSummary) => `${title.titleId}:${title.updatedAt}`;
 
 const setShowSecrets = callable<[boolean], boolean>("set_show_secrets");
+const setGroupAchievements = callable<[boolean], boolean>("set_group_achievements");
 const getAchievementLanguages = callable<[], { data: string; label: string }[]>("get_achievement_languages");
 const setAchievementLanguage = callable<[string], string>("set_achievement_language");
 
@@ -203,6 +206,26 @@ function showAchievement(event: AchievementEvent) {
 
 type Filter = "all" | "unlocked" | "locked";
 type Sort = "name" | "gamerscore" | "date";
+interface GameViewSettings { filter: Filter; sort: Sort; }
+const getGameViewSettings = callable<[string], GameViewSettings>("get_game_view_settings");
+const setGameViewSettings = callable<[string, Filter, Sort], GameViewSettings>("set_game_view_settings");
+const gameViewCache = new Map<string, GameViewSettings>();
+let rememberGameView = true;
+let gameViewPreferenceGeneration = 0;
+const setRememberGameViewSettings = callable<[boolean], boolean>("set_remember_game_view_settings");
+function applyRememberGameView(enabled: boolean) {
+  if (rememberGameView !== enabled) gameViewPreferenceGeneration++;
+  rememberGameView = enabled;
+  if (!enabled) gameViewCache.clear();
+}
+let gameViewSaveQueue = Promise.resolve();
+function saveGameView(titleId: string, value: GameViewSettings): Promise<GameViewSettings> {
+  const generation = gameViewPreferenceGeneration;
+  const result = gameViewSaveQueue.then(() => rememberGameView && generation === gameViewPreferenceGeneration
+    ? setGameViewSettings(titleId, value.filter, value.sort) : value);
+  gameViewSaveQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
 
 const FILTERS = [
   { data: "all", label: "All" },
@@ -237,7 +260,7 @@ function GameCover({ url }: { url?: string }) {
 function GamerscoreIcon() {
   const { t } = usePluginTranslation();
   return (
-    <svg viewBox="0 0 24 24" width="1em" height="1em" role="img" aria-label={t("Gamerscore")}
+    <svg viewBox="0 0 24 24" width="1em" height="1em" role="img" className="nexus-gamerscore-icon" aria-label={t("Gamerscore")}
       style={{ display: "inline-block", verticalAlign: "-0.15em", flexShrink: 0 }}>
       <circle cx="12" cy="12" r="11" style={{ fill: "#fff" }} />
       <path d="M16 8.5a5 5 0 1 0 .5 6.5V12H12" style={{ fill: "none", stroke: "#182726", strokeWidth: 2.2 }} />
@@ -247,12 +270,14 @@ function GamerscoreIcon() {
 
 function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boolean; onToggle: () => void }) {
   const { t } = usePluginTranslation();
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [buttonFocused, setButtonFocused] = useState(false);
+  const hasRevealButton = a.secret && !a.unlocked;
   const hidden = a.secret && !a.unlocked && !reveal;
   const revealed = a.secret && !a.unlocked && reveal;
   const name = a.name || t("Unnamed achievement");
   const description = a.description || (revealed ? t("Details unavailable for this secret achievement.") : "");
-  return (
-    <Focusable style={{ display: "flex", gap: 12, padding: "8px 0", opacity: a.unlocked ? 1 : 0.65 }}>
+  const content = <>
       <Icon url={hidden ? "" : a.iconUrl} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: "bold" }}>{hidden ? t("Secret achievement") : name}</div>
@@ -267,8 +292,15 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
       </div>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
         <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}>{hidden ? "?" : a.gamerscore} <GamerscoreIcon /></div>
-        {a.secret && !a.unlocked && (
+        {hasRevealButton && (
           <DialogButton
+            preferredFocus
+            noFocusRing
+            onGamepadFocus={() => {
+              setButtonFocused(true);
+              rowRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+            }}
+            onGamepadBlur={() => setButtonFocused(false)}
             aria-label={reveal ? t("Hide secret achievement") : t("Show secret achievement")}
             style={{ width: "auto", minWidth: 0, height: 32, padding: "0 12px", display: "flex", alignItems: "center", justifyContent: "center" }}
             onClick={onToggle}>
@@ -276,24 +308,61 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
           </DialogButton>
         )}
       </div>
-    </Focusable>
-  );
+  </>;
+  const style = { display: "flex", gap: 12, padding: "8px", borderRadius: 10, opacity: a.unlocked ? 1 : 0.65 };
+  // Secret rows expose only the native reveal button as a navigation target.
+  if (hasRevealButton) return <div ref={rowRef} style={style}
+    className={`nexus-achievement-row${buttonFocused ? " nexus-achievement-row-focused" : ""}`}>{content}</div>;
+  return <Focusable ref={rowRef} tabIndex={0} noFocusRing className="nexus-achievement-row"
+    aria-label={name} onActivate={() => { /* Read-only navigation target. */ }}
+    onGamepadFocus={() => rowRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" })}
+    focusClassName="nexus-achievement-row-focused" style={style}>{content}</Focusable>;
 }
 
 function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () => void; tick: number }) {
   const { locale, t } = usePluginTranslation();
   const [languageRevision, setLanguageRevision] = useState(0);
   const [reveal, setReveal] = useState(false);
+  const [grouped, setGrouped] = useState(false);
+  const [groupError, setGroupError] = useState(false);
   useEffect(() => {
-    getSettings().then(s => setReveal(!!s.show_secrets)).catch(() => {});
+    getSettings().then(s => { setReveal(!!s.show_secrets); setGrouped(!!s.group_achievements); applyRememberGameView(s.remember_game_view_settings ?? true); }).catch(() => {});
   }, []);
   // Per-row overrides are session-only; the global toggle clears them.
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const toggleReveal = (v: boolean) => { setReveal(v); setOverrides({}); setShowSecrets(v).catch(() => {}); };
   const isRevealed = (a: Achievement) => overrides[a.id] ?? reveal;
   const [detail, setDetail] = useState<TitleDetail | null>(() => achievementCache.peek(achievementCacheKey(title)) ?? null);
-  const [filter, setFilter] = useState<Filter>("all");
-  const [sort, setSort] = useState<Sort>("name");
+  const [view, setView] = useState<GameViewSettings>(() => (rememberGameView ? gameViewCache.get(title.titleId) : undefined) ?? { filter: "all", sort: "date" });
+  const { filter, sort } = view;
+  const [viewError, setViewError] = useState<Message | null>(null);
+  const viewRevision = useRef(0);
+  const viewMounted = useRef(false);
+  useEffect(() => {
+    viewMounted.current = true;
+    const revision = viewRevision.current;
+    gameViewSaveQueue.then(() => getGameViewSettings(title.titleId)).then(value => {
+      if (viewMounted.current && viewRevision.current === revision) {
+        if (rememberGameView) gameViewCache.set(title.titleId, value);
+        setView(value);
+      }
+    }).catch(() => {
+      if (viewMounted.current && viewRevision.current === revision) setViewError("Could not load game view settings.");
+    });
+    return () => { viewMounted.current = false; };
+  }, [title.titleId]);
+  const updateView = (patch: Partial<GameViewSettings>) => {
+    const next = { ...(rememberGameView ? gameViewCache.get(title.titleId) ?? view : view), ...patch };
+    const revision = ++viewRevision.current;
+    if (rememberGameView) gameViewCache.set(title.titleId, next);
+    setView(next);
+    setViewError(null);
+    if (!rememberGameView) return;
+    void saveGameView(title.titleId, next).catch(() => {
+      if (gameViewCache.get(title.titleId) === next) gameViewCache.delete(title.titleId);
+      if (viewMounted.current && viewRevision.current === revision) setViewError("Could not save game view settings.");
+    });
+  };
   const [query, setQuery] = useState("");
 
   useEffect(() => {
@@ -325,28 +394,67 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
     });
   }, [detail, filter, sort, query, reveal, overrides]);
 
+  const groups: { label: "Unlocked" | "Locked" | null; items: Achievement[] }[] = grouped
+    ? [{ label: "Unlocked", items: rows.filter(a => a.unlocked) }, { label: "Locked", items: rows.filter(a => !a.unlocked) }]
+    : [{ label: null, items: rows }];
+
   return (
     <div>
+      <style>{`
+        .nexus-achievement-row,
+        .nexus-achievement-row .gpfocus {
+          outline: none !important;
+          box-shadow: none !important;
+          animation: none !important;
+        }
+        .nexus-achievement-row-focused {
+          background: #fff;
+          color: #0e141b;
+          opacity: 1 !important;
+          border-radius: 10px;
+        }
+        .nexus-achievement-row-focused .nexus-gamerscore-icon circle {
+          fill: #0e141b !important;
+        }
+        .nexus-achievement-row-focused .nexus-gamerscore-icon path {
+          stroke: #fff !important;
+        }
+      `}</style>
       <ButtonItem layout="below" onClick={onBack}>{t("← All titles")}</ButtonItem>
       <div style={{ display: "flex", alignItems: "center", gap: 16, margin: "8px 0" }}><GameCover url={title.coverUrl} /><h2>{title.titleName}</h2></div>
       <div style={{ opacity: 0.8, marginBottom: 8 }}>
         {t("{unlocked}/{total} unlocked", { unlocked: title.unlocked, total: title.total })} • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon />
       </div>
       <DropdownItem label={t("Filter")} rgOptions={FILTERS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={filter}
-        onChange={o => setFilter(o.data as Filter)} />
+        onChange={o => updateView({ filter: o.data as Filter })} />
       <DropdownItem label={t("Sort by")} rgOptions={SORTS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={sort}
-        onChange={o => setSort(o.data as Sort)} />
+        onChange={o => updateView({ sort: o.data as Sort })} />
+      {viewError && <div role="alert">{t(viewError)}</div>}
       <AchievementLanguageSelector onChange={() => setLanguageRevision(value => value + 1)} />
+      <ToggleField label={t("Group achievements")} description={t("Separate unlocked and locked achievements.")}
+        checked={grouped} onChange={async enabled => {
+          setGroupError(false);
+          try { setGrouped(await setGroupAchievements(enabled)); }
+          catch { setGroupError(true); }
+        }} />
+      {groupError && <div role="alert">{t("Could not save achievement grouping.")}</div>}
       <ToggleField label={t("Show secret achievements")} description={t("Reveal names and descriptions of locked secret achievements.")}
         checked={reveal} onChange={toggleReveal} />
-      <TextField label={t("Search")} value={query} onChange={e => setQuery(e.target.value)} />
+      <div style={{ marginTop: 12 }}>
+        <TextField label={t("Search")} value={query} onChange={e => setQuery(e.target.value)} />
+      </div>
       {!detail && <div style={{ padding: 16 }}>{t("Loading…")}</div>}
       {detail && !detail.ok && <div style={{ padding: 16 }}>{t("Could not load achievements ({error}).", { error: translateError(locale, detail.error) })}</div>}
       {detail?.languageError && <div role="alert" style={{ padding: 16 }}>{t("Showing original achievement text. {error}", { error: translateError(locale, detail.languageError) })}</div>}
       {detail?.ok && rows.length === 0 && <div style={{ padding: 16, opacity: 0.7 }}>{t("No achievements match.")}</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {rows.map(a => <AchievementRow key={a.id || a.name} a={a} reveal={isRevealed(a)}
-          onToggle={() => setOverrides(o => ({ ...o, [a.id]: !isRevealed(a) }))} />)}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {groups.filter(group => group.items.length > 0).map(group => <div key={group.label || "all"}>
+          {group.label && <h3 style={{ margin: "12px 0 8px" }}>{t(group.label)} ({group.items.length})</h3>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {group.items.map(a => <AchievementRow key={a.id || a.name} a={a} reveal={isRevealed(a)}
+              onToggle={() => setOverrides(o => ({ ...o, [a.id]: !isRevealed(a) }))} />)}
+          </div>
+        </div>)}
       </div>
     </div>
   );
@@ -455,9 +563,10 @@ function AchievementsPage() {
 function Content() {
   const { t } = usePluginTranslation();
   const [settings, setLocal] = useState<Settings | null>(null);
+  const [rememberError, setRememberError] = useState(false);
 
   useEffect(() => {
-    getSettings().then(s => { currentDuration = s.duration; setPluginLanguage(s.plugin_language || "system"); setLocal(s); });
+    getSettings().then(s => { currentDuration = s.duration; setPluginLanguage(s.plugin_language || "system"); applyRememberGameView(s.remember_game_view_settings ?? true); setLocal(s); });
   }, []);
 
   if (!settings) return null;
@@ -502,6 +611,19 @@ function Content() {
         </div>
       </PanelSectionRow>
       <PanelSectionRow>
+        <ToggleField label={t("Remember game filters and sorting")} description={t("Save filter and sort choices separately for each game.")}
+          checked={settings.remember_game_view_settings ?? true}
+          onChange={async enabled => {
+            setRememberError(false);
+            try {
+              const saved = await setRememberGameViewSettings(enabled);
+              applyRememberGameView(saved);
+              setLocal(previous => previous ? { ...previous, remember_game_view_settings: saved } : previous);
+            } catch { setRememberError(true); }
+          }} />
+        {rememberError && <div role="alert">{t("Could not save the game settings preference.")}</div>}
+      </PanelSectionRow>
+      <PanelSectionRow>
         <PluginLanguageSelector />
       </PanelSectionRow>
     </PanelSection>
@@ -510,7 +632,7 @@ function Content() {
 
 export default definePlugin(() => {
   void initializeSystemLanguage(() => window.SteamClient.Settings.GetCurrentLanguage());
-  getSettings().then(s => { currentDuration = s.duration; setPluginLanguage(s.plugin_language || "system"); }).catch(() => {});
+  getSettings().then(s => { currentDuration = s.duration; setPluginLanguage(s.plugin_language || "system"); applyRememberGameView(s.remember_game_view_settings ?? true); }).catch(() => {});
   routerHook.addRoute(ROUTE, AchievementsPage, { exact: true });
   const listener = addEventListener<[AchievementEvent]>("achievement", showAchievement);
 
@@ -522,6 +644,7 @@ export default definePlugin(() => {
     onDismount() {
       achievementCache.clear();
       gamesCache.clear();
+      gameViewCache.clear();
       removeEventListener("achievement", listener);
       routerHook.removeRoute(ROUTE);
     },

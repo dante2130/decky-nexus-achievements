@@ -56,5 +56,13 @@
   "not found": "данные не найдены",
   "invalid titleId": "неверный идентификатор игры",
   "unreadable": "не удалось прочитать данные",
-  "Unexpected error": "Неизвестная ошибка"
+  "Unexpected error": "Неизвестная ошибка",
+  "Group achievements": "Группировать достижения",
+  "Separate unlocked and locked achievements.": "Разделять полученные и неполученные достижения.",
+  "Could not save achievement grouping.": "Не удалось сохранить группировку достижений.",
+  "Could not load game view settings.": "Не удалось загрузить настройки списка для этой игры.",
+  "Could not save game view settings.": "Не удалось сохранить настройки списка для этой игры.",
+  "Remember game filters and sorting": "Запоминать фильтры и сортировку игр",
+  "Save filter and sort choices separately for each game.": "Сохранять фильтр и сортировку отдельно для каждой игры.",
+  "Could not save the game settings preference.": "Не удалось сохранить настройку запоминания параметров игр."
 }

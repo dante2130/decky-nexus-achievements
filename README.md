@@ -38,6 +38,21 @@ in `~/.local/share/nexus-launcher/achievements/` (`index.json` plus
 `<titleId>.json`), overridable with `NEXUS_ACHIEVEMENTS_DIR`. The page refreshes
 when a new achievement event arrives.
 
+Enable **Group achievements**, above the secret-achievement toggle, to separate
+the list into **Unlocked** and **Locked** sections with counts. Search and filters
+apply before grouping, and the selected sort order is preserved inside each
+section. Empty sections are hidden. Grouping is off by default and saved across
+restarts.
+
+Filter and sort selections are saved separately for each game in
+`settings.json`, under `game_view_settings` keyed by title ID. Reopening a game
+restores its own choices, including after restarting Decky. Games without saved
+preferences start with **All** and **Unlock date** (newest first).
+Use **Remember game filters and sorting** immediately before **Plugin language**
+in the main panel to turn this behavior on or off. It is enabled by default.
+When disabled, each reopened game starts with the defaults and filter/sort changes
+are not saved. Existing saved choices are retained for when the toggle is enabled again.
+
 The viewer keeps game and achievement lists in memory for the plugin session.
 Reopening a list displays cached rows immediately. Achievement responses are
 reused for up to one minute; stale lists stay visible during background refreshes.
