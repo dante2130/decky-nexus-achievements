@@ -7,8 +7,12 @@ import asyncio
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
+# Decky loads main.py by filename without adding the plugin directory to sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from achievement_language import LANGUAGES, translate_title
 
 try:
     import decky
@@ -18,7 +22,7 @@ except ImportError:  # unit tests run outside Decky Loader
 DEFAULT_RELATIVE = ".local/share/nexus-launcher/achievement-events.jsonl"
 POLL_SECONDS = 0.5
 MAX_LINE = 64 * 1024
-DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False}
+DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": ""}
 
 
 def user_home() -> Path:
@@ -91,6 +95,7 @@ def list_titles() -> Dict[str, Any]:
         titles.append({
             "titleId": t["titleId"],
             "titleName": _str(t.get("titleName")) or t["titleId"],
+            "coverUrl": _str(t.get("coverUrl")),
             "unlocked": _num(t.get("unlocked")),
             "total": _num(t.get("total")),
             "gamerscore": _num(t.get("gamerscore")),
@@ -98,6 +103,20 @@ def list_titles() -> Dict[str, Any]:
             "updatedAt": _num(t.get("updatedAt")),
         })
     return {"ok": True, "titles": titles}
+
+
+def get_running_title() -> Optional[Dict[str, Any]]:
+    data = _read_json(resolve_achievements_dir() / "running.json")
+    if not data or not valid_title_id(data.get("titleId")):
+        return None
+    pid = data.get("launcherPid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return None
+    return next((title for title in list_titles()["titles"] if title["titleId"] == data["titleId"]), None)
 
 
 def get_title(title_id: Any) -> Dict[str, Any]:
@@ -134,6 +153,7 @@ def get_title(title_id: Any) -> Dict[str, Any]:
         "ok": True,
         "titleId": title_id,
         "titleName": _str(data.get("titleName")) or title_id,
+        "coverUrl": _str(data.get("coverUrl")),
         "updatedAt": _num(data.get("updatedAt")),
         "achievements": items,
     }
@@ -238,15 +258,28 @@ class Plugin:
             decky.logger.error(f"settings save error: {error}")
         return self.settings["show_secrets"]
 
+    async def get_running_title(self) -> Optional[Dict[str, Any]]:
+        return get_running_title()
+
     async def list_titles(self) -> Dict[str, Any]:
         try:
             return list_titles()
         except Exception as error:
             return {"ok": False, "error": str(error), "titles": []}
 
+    async def get_achievement_languages(self) -> list:
+        return [{"data": tag, "label": name} for tag, name in LANGUAGES.items()]
+
+    async def set_achievement_language(self, language: str) -> str:
+        if language not in LANGUAGES:
+            raise ValueError("Unsupported achievement language.")
+        self.settings["achievement_language"] = language
+        self._save()
+        return language
+
     async def get_title_achievements(self, title_id: str) -> Dict[str, Any]:
         try:
-            return get_title(title_id)
+            return await translate_title(user_home(), get_title(title_id), self.settings.get("achievement_language", ""))
         except Exception as error:
             return {"ok": False, "error": str(error), "achievements": []}
 

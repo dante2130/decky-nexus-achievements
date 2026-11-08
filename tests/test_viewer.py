@@ -29,11 +29,27 @@ class ViewerTests(unittest.TestCase):
 
     def test_list_titles_filters_bad(self):
         (self.root / "index.json").write_text(json.dumps({"version": 1, "titles": [
-            {"titleId": "a1", "titleName": "A", "unlocked": 1, "total": 2, "gamerscore": 5, "gamerscoreTotal": 10},
+            {"titleId": "a1", "titleName": "DRAGON QUEST XI S", "coverUrl": "https://store-images.s-microsoft.com/cover", "unlocked": 1, "total": 2, "gamerscore": 5, "gamerscoreTotal": 10},
             {"titleId": "../x"}, "junk", {"titleId": 5}]}))
         titles = main.list_titles()["titles"]
         self.assertEqual([t["titleId"] for t in titles], ["a1"])
         self.assertEqual(titles[0]["total"], 2)
+        self.assertEqual(titles[0]["titleName"], "DRAGON QUEST XI S")
+        self.assertEqual(titles[0]["coverUrl"], "https://store-images.s-microsoft.com/cover")
+
+    def test_running_title_requires_live_launcher_and_known_title(self):
+        (self.root / "index.json").write_text(json.dumps({"titles": [{"titleId": "123", "titleName": "Game", "coverUrl": "https://example.com/cover"}]}))
+        running = self.root / "running.json"
+        self.assertIsNone(main.get_running_title())
+        running.write_text(json.dumps({"titleId": "123", "launcherPid": os.getpid()}))
+        self.assertEqual(main.get_running_title()["titleName"], "Game")
+        from unittest.mock import patch
+        with patch.object(main.os, "kill", side_effect=ProcessLookupError):
+            self.assertIsNone(main.get_running_title())
+        running.write_text(json.dumps({"titleId": "unknown", "launcherPid": os.getpid()}))
+        self.assertIsNone(main.get_running_title())
+        running.write_text(json.dumps({"titleId": "123", "launcherPid": -1}))
+        self.assertIsNone(main.get_running_title())
 
     def test_traversal_rejected(self):
         (Path(self.dir.name) / "secret.json").write_text(json.dumps({"achievements": []}))

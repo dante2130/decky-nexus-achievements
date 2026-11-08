@@ -13,7 +13,7 @@ import {
 } from "@decky/ui";
 import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster } from "@decky/api";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FaEye, FaEyeSlash, FaTrophy } from "react-icons/fa";
+import { FaEye, FaEyeSlash, FaPlay, FaTrophy } from "react-icons/fa";
 
 interface AchievementEvent {
   type: "achievement";
@@ -32,6 +32,7 @@ interface Settings {
   duration: number;
   events_path: string;
   show_secrets?: boolean;
+  achievement_language?: string;
   resolved_path?: string;
 }
 
@@ -42,6 +43,7 @@ const testNotification = callable<[], void>("test_notification");
 interface TitleSummary {
   titleId: string;
   titleName: string;
+  coverUrl?: string;
   unlocked: number;
   total: number;
   gamerscore: number;
@@ -73,8 +75,42 @@ const listTitles = callable<[], { ok: boolean; error?: string; titles: TitleSumm
 const getTitleAchievements = callable<[string], TitleDetail>("get_title_achievements");
 
 const setShowSecrets = callable<[boolean], boolean>("set_show_secrets");
+const getAchievementLanguages = callable<[], { data: string; label: string }[]>("get_achievement_languages");
+const setAchievementLanguage = callable<[string], string>("set_achievement_language");
+
+function AchievementLanguageSelector({ onChange }: { onChange?: () => void }) {
+  const [language, setLanguage] = useState("");
+  const [options, setOptions] = useState<{ data: string; label: string }[]>([]);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    let live = true;
+    Promise.all([getSettings(), getAchievementLanguages()]).then(([settings, choices]) => {
+      if (live) { setLanguage(settings.achievement_language || ""); setOptions(choices); }
+    }).catch(() => { if (live) setError("Could not load achievement languages."); });
+    return () => { live = false; };
+  }, []);
+  return (
+    <div>
+      {options.length > 0 && <DropdownItem label="Achievement language"
+        description="Names and descriptions only. Xbox may use a fallback when a translation is unavailable."
+        rgOptions={options} selectedOption={language}
+        onChange={async option => {
+          if (saving) return;
+          setSaving(true); setError("");
+          try { setLanguage(await setAchievementLanguage(option.data)); onChange?.(); }
+          catch { setError("Could not save achievement language."); }
+          finally { setSaving(false); }
+        }} />}
+      {saving && <div role="status">Changing language…</div>}
+      {error && <div role="alert">{error}</div>}
+    </div>
+  );
+}
 
 const ROUTE = "/nexus-achievements";
+let requestedTitle: string | null = null;
+const getRunningTitle = callable<[], TitleSummary | null>("get_running_title");
 
 // The toast runs in the Steam UI, so keep the duration locally.
 let currentDuration = 8000;
@@ -120,6 +156,25 @@ function Icon({ url }: { url: string }) {
     : <div style={{ width: 56, height: 56, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><FaTrophy size={28} /></div>;
 }
 
+function GameCover({ url }: { url?: string }) {
+  const src = safeIcon(url || "");
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [src]);
+  return <div style={{ width: 60, height: 80, flexShrink: 0, borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    {src && !failed ? <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <FaTrophy size={24} />}
+  </div>;
+}
+
+function GamerscoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="1em" height="1em" role="img" aria-label="Gamerscore"
+      style={{ display: "inline-block", verticalAlign: "-0.15em", flexShrink: 0 }}>
+      <circle cx="12" cy="12" r="11" style={{ fill: "#fff" }} />
+      <path d="M16 8.5a5 5 0 1 0 .5 6.5V12H12" style={{ fill: "none", stroke: "#182726", strokeWidth: 2.2 }} />
+    </svg>
+  );
+}
+
 function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boolean; onToggle: () => void }) {
   const hidden = a.secret && !a.unlocked && !reveal;
   const revealed = a.secret && !a.unlocked && reveal;
@@ -140,7 +195,7 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
         {!a.unlocked && a.progress !== null && !hidden && <div style={{ fontSize: 12, opacity: 0.7 }}>{a.progress}%</div>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-        <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}>{hidden ? "? G" : `${a.gamerscore} G`}</div>
+        <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}>{hidden ? "?" : a.gamerscore} <GamerscoreIcon /></div>
         {a.secret && !a.unlocked && (
           <DialogButton
             aria-label={reveal ? "Hide secret achievement" : "Show secret achievement"}
@@ -155,6 +210,7 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
 }
 
 function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () => void; tick: number }) {
+  const [languageRevision, setLanguageRevision] = useState(0);
   const [reveal, setReveal] = useState(false);
   useEffect(() => {
     getSettings().then(s => setReveal(!!s.show_secrets)).catch(() => {});
@@ -170,11 +226,12 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
 
   useEffect(() => {
     let live = true;
+    setDetail(null);
     getTitleAchievements(title.titleId)
       .then(d => { if (live) setDetail(d); })
       .catch(() => { if (live) setDetail({ ok: false, error: "Failed to load", achievements: [] }); });
     return () => { live = false; };
-  }, [title.titleId, tick]);
+  }, [title.titleId, tick, languageRevision]);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -195,14 +252,15 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
   return (
     <div>
       <ButtonItem layout="below" onClick={onBack}>← All titles</ButtonItem>
-      <h2 style={{ margin: "8px 0" }}>{title.titleName}</h2>
+      <div style={{ display: "flex", alignItems: "center", gap: 16, margin: "8px 0" }}><GameCover url={title.coverUrl} /><h2>{title.titleName}</h2></div>
       <div style={{ opacity: 0.8, marginBottom: 8 }}>
-        {title.unlocked}/{title.total} unlocked • {title.gamerscore}/{title.gamerscoreTotal} G
+        {title.unlocked}/{title.total} unlocked • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon />
       </div>
       <DropdownItem label="Filter" rgOptions={FILTERS} selectedOption={filter}
         onChange={o => setFilter(o.data as Filter)} />
       <DropdownItem label="Sort by" rgOptions={SORTS} selectedOption={sort}
         onChange={o => setSort(o.data as Sort)} />
+      <AchievementLanguageSelector onChange={() => setLanguageRevision(value => value + 1)} />
       <ToggleField label="Show secret achievements" description="Reveal names and descriptions of locked secret achievements."
         checked={reveal} onChange={toggleReveal} />
       <TextField label="Search" value={query} onChange={e => setQuery(e.target.value)} />
@@ -215,10 +273,43 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
   );
 }
 
+function RunningGame({ onSelect, showPlayingText = false }: { onSelect: (titleId: string) => void; showPlayingText?: boolean }) {
+  const [title, setTitle] = useState<TitleSummary | null>(null);
+  useEffect(() => {
+    let live = true;
+    const refresh = () => getRunningTitle().then(value => { if (live) setTitle(value); })
+      .catch(() => { if (live) setTitle(null); });
+    void refresh();
+    const timer = setInterval(refresh, 3000);
+    return () => { live = false; clearInterval(timer); };
+  }, []);
+  if (!title) return null;
+  return <TitleRow title={title} onSelect={onSelect} playing showPlayingText={showPlayingText} />;
+}
+
+function TitleRow({ title, onSelect, playing = false, showPlayingText = false }: {
+  title: TitleSummary; onSelect: (titleId: string) => void; playing?: boolean; showPlayingText?: boolean;
+}) {
+  return <ButtonItem layout="below" onClick={() => onSelect(title.titleId)}>
+    <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left" }}>
+      <GameCover url={title.coverUrl} />
+      <div style={{ flex: 1, minWidth: 0, whiteSpace: "normal" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ flex: 1, minWidth: 0 }}>{title.titleName}</span>
+          {playing && <span aria-label="Now playing" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0, color: "#8fdb8f", fontSize: 12, whiteSpace: "nowrap" }}>
+            <FaPlay aria-hidden="true" />{showPlayingText && "Now playing"}
+          </span>}
+        </div>
+        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>{title.unlocked}/{title.total} unlocked • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon /></div>
+      </div>
+    </div>
+  </ButtonItem>;
+}
+
 function AchievementsPage() {
   const [titles, setTitles] = useState<TitleSummary[] | null>(null);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(() => { const title = requestedTitle; requestedTitle = null; return title; });
   const [tick, setTick] = useState(0);
 
   const reload = useCallback(() => {
@@ -247,19 +338,13 @@ function AchievementsPage() {
       ) : (
         <div>
           <h1 style={{ margin: "0 0 12px" }}>Nexus Achievements</h1>
+          <RunningGame onSelect={setSelected} showPlayingText />
           {titles === null && <div>Loading…</div>}
           {error && <div style={{ padding: 8 }}>Error: {error}</div>}
           {titles && titles.length === 0 && !error && (
             <div style={{ opacity: 0.7 }}>No achievements yet. Play a Nexus game to start unlocking.</div>
           )}
-          {titles?.map(t => (
-            <ButtonItem key={t.titleId} layout="below" onClick={() => setSelected(t.titleId)}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
-                <span>{t.titleName}</span>
-                <span style={{ opacity: 0.8 }}>{t.unlocked}/{t.total} • {t.gamerscore}/{t.gamerscoreTotal} G</span>
-              </div>
-            </ButtonItem>
-          ))}
+          {titles?.map(t => <TitleRow key={t.titleId} title={t} onSelect={setSelected} />)}
           <ButtonItem layout="below" onClick={reload}>Refresh</ButtonItem>
         </div>
       )}
@@ -286,6 +371,9 @@ function Content() {
   return (
     <PanelSection title="Nexus Achievements">
       <PanelSectionRow>
+        <RunningGame onSelect={titleId => { requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
+      </PanelSectionRow>
+      <PanelSectionRow>
         <ButtonItem layout="below" onClick={() => { Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }}>
           View all achievements
         </ButtonItem>
@@ -293,6 +381,9 @@ function Content() {
       <PanelSectionRow>
         <ToggleField label="Enable notifications" checked={settings.enabled}
           onChange={enabled => update({ enabled })} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <AchievementLanguageSelector />
       </PanelSectionRow>
       <PanelSectionRow>
         <SliderField label="Duration (seconds)" min={2} max={30} step={1}
