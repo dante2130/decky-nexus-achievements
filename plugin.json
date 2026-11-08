@@ -1,0 +1,11 @@
+{
+  "name": "Nexus Achievements",
+  "author": "dante2130",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["achievements", "notifications", "xbox"],
+    "description": "Xbox-style achievement toasts for Nexus (xodus-nexus) games.",
+    "image": "https://opengraph.githubassets.com/1/dante2130/nexus-runtime"
+  }
+}
