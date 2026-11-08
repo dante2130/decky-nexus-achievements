@@ -29,6 +29,15 @@ Malformed lines and other `type` values are ignored. The plugin starts at the en
 3. Copy this folder (with `dist/`, `main.py`, `plugin.json`, `package.json`, `LICENSE`) to `~/homebrew/plugins/decky-nexus-achievements/` (needs root to write), then restart Decky: `sudo systemctl restart plugin_loader`.
 4. Open the Quick Access menu (`...`), then Nexus Achievements, then "Send test notification".
 
+## Achievements viewer
+
+Open the quick-access panel and press **View all achievements** to browse
+titles and per-title achievements (filter All/Unlocked/Locked, sort, search;
+secret achievements stay hidden until unlocked). Data comes from snapshot files
+in `~/.local/share/nexus-launcher/achievements/` (`index.json` plus
+`<titleId>.json`), overridable with `NEXUS_ACHIEVEMENTS_DIR`. The page refreshes
+when a new achievement event arrives.
+
 ## Configuration
 
 Event file, in order of precedence:
