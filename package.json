@@ -1,6 +1,6 @@
 {
   "name": "decky-nexus-achievements",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Achievement notifications for Nexus runtime games on Steam Deck.",
   "type": "module",
   "scripts": {

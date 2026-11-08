@@ -13,7 +13,7 @@ import {
 } from "@decky/ui";
 import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster } from "@decky/api";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FaTrophy } from "react-icons/fa";
+import { FaEye, FaEyeSlash, FaTrophy } from "react-icons/fa";
 
 interface AchievementEvent {
   type: "achievement";
@@ -125,32 +125,31 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
   const revealed = a.secret && !a.unlocked && reveal;
   const name = a.name || "Unnamed achievement";
   const description = a.description || (revealed ? "Details unavailable for this secret achievement." : "");
-  const canToggle = a.secret && !a.unlocked;
-  const showProgress = !a.unlocked && a.progress !== null && !hidden;
-  const toggle = canToggle && (
-    <DialogButton style={{ width: "auto", minWidth: 0, flexShrink: 0, padding: "4px 12px" }} onClick={onToggle}>
-      {reveal ? "Hide" : "Show"}
-    </DialogButton>
-  );
   return (
     <Focusable style={{ display: "flex", gap: 12, padding: "8px 0", opacity: a.unlocked ? 1 : 0.65 }}>
       <Icon url={hidden ? "" : a.iconUrl} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: "bold" }}>{hidden ? "Secret achievement" : name}</div>
         <div style={{ fontSize: 13, opacity: 0.8 }}>{hidden ? "Keep playing to reveal this achievement." : description}</div>
-        {showProgress && (
-          <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ flex: 1, maxWidth: canToggle ? "55%" : undefined, height: 6, background: "rgba(255,255,255,0.15)", borderRadius: 3 }}>
-              <div style={{ width: `${a.progress}%`, height: "100%", background: "#1a9fff", borderRadius: 3 }} />
-            </div>
-            {toggle}
+        {!a.unlocked && a.progress !== null && !hidden && (
+          <div style={{ marginTop: 4, height: 6, background: "rgba(255,255,255,0.15)", borderRadius: 3 }}>
+            <div style={{ width: `${a.progress}%`, height: "100%", background: "#1a9fff", borderRadius: 3 }} />
           </div>
         )}
         {a.unlocked && a.unlockedAt && <div style={{ fontSize: 12, opacity: 0.7 }}>Unlocked {fmtDate(a.unlockedAt)}</div>}
-        {showProgress && <div style={{ fontSize: 12, opacity: 0.7 }}>{a.progress}%</div>}
+        {!a.unlocked && a.progress !== null && !hidden && <div style={{ fontSize: 12, opacity: 0.7 }}>{a.progress}%</div>}
       </div>
-      {!showProgress && toggle}
-      <div style={{ fontWeight: "bold", whiteSpace: "nowrap", alignSelf: "center" }}>{hidden ? "? G" : `${a.gamerscore} G`}</div>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+        <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}>{hidden ? "? G" : `${a.gamerscore} G`}</div>
+        {a.secret && !a.unlocked && (
+          <DialogButton
+            aria-label={reveal ? "Hide secret achievement" : "Show secret achievement"}
+            style={{ width: "auto", minWidth: 0, height: 32, padding: "0 12px", display: "flex", alignItems: "center", justifyContent: "center" }}
+            onClick={onToggle}>
+            {reveal ? <FaEyeSlash /> : <FaEye />}
+          </DialogButton>
+        )}
+      </div>
     </Focusable>
   );
 }
