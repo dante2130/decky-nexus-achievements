@@ -20,17 +20,23 @@ MAX_OUTPUT = 4 * 1024 * 1024
 def backend_command(home: Path) -> tuple[list[str], dict[str, str]]:
     # Execute as the Deck user so the backend uses their existing sign-in.
     config = home / ".config"
-    pointer = json.loads((config / "xodus-nexus/xodus-backends/current.json").read_text())
-    binary = Path(pointer["binaryPath"])
+    binary = home / ".local/share/nexus-launcher/achievement-backend/xodus-cli"
+    if not binary.is_file():
+        pointer = json.loads((config / "xodus-nexus/xodus-backends/current.json").read_text())
+        binary = Path(pointer["binaryPath"])
     if not binary.is_absolute() or not binary.is_file():
         raise ValueError("Nexus achievement backend is not installed.")
     owner = pwd.getpwuid(home.stat().st_uid)
     command = [str(binary)]
-    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(config))
+    user_env = {"HOME": str(home), "USER": owner.pw_name, "LOGNAME": owner.pw_name,
+                "XDG_CONFIG_HOME": str(config), "XDG_DATA_HOME": str(home / ".local/share"),
+                "XDG_CACHE_HOME": str(home / ".cache"), "XDG_RUNTIME_DIR": f"/run/user/{owner.pw_uid}",
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{owner.pw_uid}/bus"}
+    env = dict(os.environ, **user_env)
     if os.geteuid() != owner.pw_uid:
         runuser = shutil.which("runuser") or "/usr/sbin/runuser"
         command = [runuser, "-u", owner.pw_name, "--", "env",
-                   f"HOME={home}", f"XDG_CONFIG_HOME={config}", *command]
+                   *(f"{key}={value}" for key, value in user_env.items()), *command]
     return command, env
 
 

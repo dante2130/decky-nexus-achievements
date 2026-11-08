@@ -1,7 +1,9 @@
 import asyncio
 import json
 import sys
+import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -11,6 +13,21 @@ import main
 
 
 class LanguageTests(unittest.TestCase):
+    def test_helper_backend_uses_deck_user_and_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            binary = home / ".local/share/nexus-launcher/achievement-backend/xodus-cli"
+            binary.parent.mkdir(parents=True)
+            binary.touch()
+            owner = SimpleNamespace(pw_uid=1000, pw_name="deck")
+            with patch.object(language.pwd, "getpwuid", return_value=owner), patch.object(language.os, "geteuid", return_value=0), patch.object(language.shutil, "which", return_value="/usr/sbin/runuser"):
+                command, env = language.backend_command(home)
+            self.assertEqual(command[:5], ["/usr/sbin/runuser", "-u", "deck", "--", "env"])
+            self.assertEqual(command[-1], str(binary))
+            self.assertEqual(env["HOME"], str(home))
+            self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
+            self.assertIn("XDG_RUNTIME_DIR=/run/user/1000", command)
+
     def detail(self):
         return {"ok": True, "titleId": "42", "achievements": [
             {"id": "scid:1", "name": "Original", "description": "Original description",
@@ -47,6 +64,15 @@ class LanguageTests(unittest.TestCase):
             asyncio.run(language.translate_title(Path("/tmp"), self.detail(), "../../en-US"))
         with self.assertRaises(ValueError):
             language.localized_text(b'{"schema":1,"titleId":"43","items":[]}', "42")
+
+    def test_translation_failure_keeps_saved_achievements_visible(self):
+        plugin = main.Plugin()
+        plugin.settings = {**main.DEFAULT_SETTINGS, "achievement_language": "uk-UA"}
+        with patch.object(main, "get_title", return_value=self.detail()), patch.object(main, "translate_title", AsyncMock(side_effect=ValueError("Update the Nexus backend"))):
+            result = asyncio.run(plugin.get_title_achievements("42"))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["achievements"], self.detail()["achievements"])
+        self.assertIn("Update the Nexus backend", result["languageError"])
 
     def test_setting_is_validated_and_survives_other_settings_updates(self):
         plugin = main.Plugin()

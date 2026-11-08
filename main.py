@@ -278,10 +278,11 @@ class Plugin:
         return language
 
     async def get_title_achievements(self, title_id: str) -> Dict[str, Any]:
+        detail = get_title(title_id)
         try:
-            return await translate_title(user_home(), get_title(title_id), self.settings.get("achievement_language", ""))
+            return await translate_title(user_home(), detail, self.settings.get("achievement_language", ""))
         except Exception as error:
-            return {"ok": False, "error": str(error), "achievements": []}
+            return {**detail, "languageError": str(error) or "Could not load the selected language."}
 
     async def test_notification(self) -> None:
         await decky.emit("achievement", {

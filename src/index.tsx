@@ -66,6 +66,7 @@ interface Achievement {
 interface TitleDetail {
   ok: boolean;
   error?: string;
+  languageError?: string;
   titleId?: string;
   titleName?: string;
   achievements: Achievement[];
@@ -266,6 +267,7 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
       <TextField label="Search" value={query} onChange={e => setQuery(e.target.value)} />
       {!detail && <div style={{ padding: 16 }}>Loading…</div>}
       {detail && !detail.ok && <div style={{ padding: 16 }}>Could not load achievements ({detail.error}).</div>}
+      {detail?.languageError && <div role="alert" style={{ padding: 16 }}>Showing original achievement text. {detail.languageError}</div>}
       {detail?.ok && rows.length === 0 && <div style={{ padding: 16, opacity: 0.7 }}>No achievements match.</div>}
       {rows.map(a => <AchievementRow key={a.id || a.name} a={a} reveal={isRevealed(a)}
         onToggle={() => setOverrides(o => ({ ...o, [a.id]: !isRevealed(a) }))} />)}

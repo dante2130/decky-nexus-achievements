@@ -59,7 +59,7 @@ Other languages fetch localized text from Xbox through the signed-in Nexus
 backend. Xbox may fall back to another language when a game has no translation.
 Unlock state, score, and secret visibility continue to use the original snapshot.
 
-Localized reads require a managed Nexus backend supporting
+Localized reads require a Nexus backend supporting
 `xodus-cli achievements TITLE_ID --json --language uk-UA`. Backend 0.2.14 does
 not support this option. The corresponding backend source change is included in
 `backend-patches/achievement-language.patch`; apply it in the `nexus-backend`
@@ -68,7 +68,12 @@ source checkout at commit `a80cfa0b822d777b6344971079cdea99e5ebfdf9` with
 build instructions. The plugin reports an update requirement for older backends;
 select **Original** to keep viewing saved achievements. The managed backend is
 resolved from `~/.config/xodus-nexus/xodus-backends/current.json` and runs as the
-Deck user, using their existing Nexus sign-in.
+Deck user, using their existing Nexus sign-in. You can also install the language-enabled
+backend from [dante2130/nexus-backend](https://github.com/dante2130/nexus-backend)
+under `~/.local/share/nexus-launcher/achievement-backend/` (containing `xodus-cli`
+and `xodus-service`). The plugin prefers that copy, so language support can be
+installed without changing the launcher's managed backend. Failed localized reads
+show a warning while preserving the saved achievement list.
 
 ## Configuration
 
