@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { russian, ukrainian, translate, translateError, getPluginLanguage, getPluginLanguagePreference, initializeSystemLanguage, resolveSystemLanguage, setPluginLanguage, subscribeLanguage, pluginLanguages, pluginLocales } from "../src/i18n.ts";
+import { english, russian, ukrainian, translate, translateError, getPluginLanguage, getPluginLanguagePreference, initializeSystemLanguage, resolveSystemLanguage, setPluginLanguage, subscribeLanguage, pluginLanguages, pluginLocales } from "../src/i18n.ts";
 
-test("Russian and Ukrainian catalogs cover the same messages and preserve placeholders", () => {
+test("each language catalog covers the English messages and preserves placeholders", () => {
   const placeholders = text => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
-  assert.deepEqual(Object.keys(ukrainian).sort(), Object.keys(russian).sort());
-  for (const catalog of [russian, ukrainian]) {
+  for (const catalog of [english, russian, ukrainian]) {
+    assert.deepEqual(Object.keys(catalog).sort(), Object.keys(english).sort());
     for (const [english, translated] of Object.entries(catalog)) {
       assert.ok(translated.trim(), english);
       assert.deepEqual(placeholders(translated), placeholders(english), english);
