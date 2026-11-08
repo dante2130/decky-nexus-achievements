@@ -56,6 +56,23 @@ class ViewerTests(unittest.TestCase):
         (self.root / "bad.json").write_text("[1]")
         self.assertFalse(main.get_title("bad")["ok"])
 
+    def test_settings_default_and_toggle_persist(self):
+        self.assertFalse(main.DEFAULT_SETTINGS["show_secrets"])
+        import asyncio
+        plugin = main.Plugin()
+        plugin.settings = dict(main.DEFAULT_SETTINGS)
+        plugin._save = lambda: None
+        self.assertTrue(asyncio.run(plugin.set_show_secrets(True)))
+        asyncio.run(plugin.set_settings(True, 5000, ""))
+        self.assertTrue(plugin.settings["show_secrets"])
+
+    def test_secret_fields_pass_through(self):
+        (self.root / "s.json").write_text(json.dumps({"achievements": [
+            {"id": "1", "name": "Hid", "description": "", "secret": True}]}))
+        a = main.get_title("s")["achievements"][0]
+        self.assertTrue(a["secret"])
+        self.assertEqual(a["description"], "")
+
     def test_oversize(self):
         (self.root / "big.json").write_bytes(b" " * (main.MAX_SNAPSHOT + 1))
         self.assertFalse(main.get_title("big")["ok"])

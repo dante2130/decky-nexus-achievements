@@ -18,7 +18,7 @@ except ImportError:  # unit tests run outside Decky Loader
 DEFAULT_RELATIVE = ".local/share/nexus-launcher/achievement-events.jsonl"
 POLL_SECONDS = 0.5
 MAX_LINE = 64 * 1024
-DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": ""}
+DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False}
 
 
 def user_home() -> Path:
@@ -224,11 +224,19 @@ class Plugin:
     async def set_settings(self, enabled: bool, duration: int, events_path: str = "") -> Dict[str, Any]:
         duration = max(1000, min(60000, int(duration)))
         changed = events_path != self.settings["events_path"]
-        self.settings = {"enabled": bool(enabled), "duration": duration, "events_path": str(events_path)}
+        self.settings = {**self.settings, "enabled": bool(enabled), "duration": duration, "events_path": str(events_path)}
         self._save()
         if changed:
             await self._restart()
         return await self.get_settings()
+
+    async def set_show_secrets(self, show: bool) -> bool:
+        self.settings["show_secrets"] = bool(show)
+        try:
+            self._save()
+        except OSError as error:
+            decky.logger.error(f"settings save error: {error}")
+        return self.settings["show_secrets"]
 
     async def list_titles(self) -> Dict[str, Any]:
         try:
