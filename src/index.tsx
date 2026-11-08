@@ -159,15 +159,38 @@ const getRunningTitle = callable<[], TitleSummary | null>("get_running_title");
 // The toast runs in the Steam UI, so keep the duration locally.
 let currentDuration = 8000;
 
+function NotificationIcon({ url }: { url?: string }) {
+  const src = safeIcon(url || "");
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [src]);
+  return <div className="nexus-achievement-notification-logo" style={{ width: 44, height: 40, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+    <style>{`
+      .nexus-achievement-notification div:has(> .nexus-achievement-notification-logo) {
+        display: flex !important;
+        align-self: center !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 44px !important;
+        height: 40px !important;
+        min-height: 0;
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+      }
+    `}</style>
+    {src && !failed
+      ? <img src={src} alt="" onError={() => setFailed(true)} style={{ width: 40, height: 40, borderRadius: 4, objectFit: "cover" }} />
+      : <FaTrophy size={36} style={{ width: 36, height: 36, display: "block", flexShrink: 0 }} />}
+  </div>;
+}
+
 function showAchievement(event: AchievementEvent) {
   achievementCache.clear();
   gamesCache.invalidate("titles");
   const score = typeof event.gamerscore === "number" ? `${event.gamerscore} G` : "";
   const body = [event.description, score].filter(Boolean).join(" • ");
-  const logo = event.iconUrl && /^https?:\/\//.test(event.iconUrl)
-    ? <img src={event.iconUrl} style={{ width: 48, height: 48, borderRadius: 4 }} />
-    : <FaTrophy />;
+  const logo = <NotificationIcon url={event.iconUrl} />;
   toaster.toast({
+    className: "nexus-achievement-notification",
     title: translate(getPluginLanguage(), "Achievement unlocked: {name}", { name: event.name }),
     body,
     logo,
