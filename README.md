@@ -56,6 +56,17 @@ open that game’s achievements. The launcher publishes `running.json` alongside
 the snapshots; the plugin polls it every three seconds and ignores records whose
 launcher process has exited. Older launchers still support the ordinary list.
 
+### Plugin interface language
+
+Use **Plugin language** at the bottom of the main plugin panel to choose a
+supported interface language or **SteamOS language** (the default).
+Automatic mode reads Steam's interface language, using English when it is unsupported.
+If Steam's language API is unavailable, it uses the browser locale with the same
+English fallback. An explicitly saved language takes precedence. The selection is
+saved across restarts and updates menus, buttons, messages, dates, and notification
+headings immediately. It does not change achievement names and descriptions;
+those use the separate achievement-language selector below.
+
 ### Achievement language
 
 Choose **Achievement language** in the plugin panel or a title's achievement
@@ -67,7 +78,7 @@ backend. Xbox may fall back to another language when a game has no translation.
 Unlock state, score, and secret visibility continue to use the original snapshot.
 
 Localized reads require a Nexus backend supporting
-`xodus-cli achievements TITLE_ID --json --language uk-UA`. Backend 0.2.14 does
+`xodus-cli achievements TITLE_ID --json --language LANGUAGE_TAG`. Backend 0.2.14 does
 not support this option. The corresponding backend source change is included in
 `backend-patches/achievement-language.patch`; apply it in the `nexus-backend`
 source checkout at commit `a80cfa0b822d777b6344971079cdea99e5ebfdf9` with
@@ -97,6 +108,8 @@ Panel options: enable, toast duration, test notification.
 `python3 -m unittest discover -s tests`
 
 Frontend cache tests (Node.js 24): `npm run test:cache`.
+
+Interface localization tests: `npm run test:i18n`.
 
 ## Limitations
 

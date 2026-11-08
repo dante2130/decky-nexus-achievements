@@ -22,7 +22,7 @@ except ImportError:  # unit tests run outside Decky Loader
 DEFAULT_RELATIVE = ".local/share/nexus-launcher/achievement-events.jsonl"
 POLL_SECONDS = 0.5
 MAX_LINE = 64 * 1024
-DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": ""}
+DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": "", "plugin_language": "system"}
 
 
 def user_home() -> Path:
@@ -277,6 +277,18 @@ class Plugin:
         self._save()
         return language
 
+    async def set_plugin_language(self, language: str) -> str:
+        if language not in ("system", "en", "ru", "uk"):
+            raise ValueError("Unsupported plugin language.")
+        previous = self.settings
+        self.settings = {**previous, "plugin_language": language}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return language
+
     async def get_title_achievements(self, title_id: str) -> Dict[str, Any]:
         detail = get_title(title_id)
         try:
@@ -284,10 +296,17 @@ class Plugin:
         except Exception as error:
             return {**detail, "languageError": str(error) or "Could not load the selected language."}
 
-    async def test_notification(self) -> None:
+    async def test_notification(self, locale: str = "") -> None:
+        texts = {
+            "ru": ("Тестовое достижение", "Уведомления Nexus работают."),
+            "uk": ("Тестове досягнення", "Сповіщення Nexus працюють."),
+            "en": ("Test achievement", "Nexus notifications work."),
+        }
+        language = self.settings.get("plugin_language", "system")
+        name, description = texts.get(locale if language == "system" else language, texts["en"])
         await decky.emit("achievement", {
             "type": "achievement", "ts": "", "titleId": "test", "scid": "", "id": "0",
-            "name": "Test achievement", "description": "Nexus notifications work.",
+            "name": name, "description": description,
             "gamerscore": 10, "iconUrl": "",
         })
 

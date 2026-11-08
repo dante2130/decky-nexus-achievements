@@ -12,9 +12,10 @@ import {
   staticClasses,
 } from "@decky/ui";
 import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster } from "@decky/api";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { FaEye, FaEyeSlash, FaPlay, FaTrophy } from "react-icons/fa";
 import { SessionCache } from "./cache";
+import { getPluginLanguage, getPluginLanguagePreference, initializeSystemLanguage, setPluginLanguage, subscribeLanguage, translate, translateError, pluginLanguages, pluginLocales, type Message } from "./i18n";
 
 interface AchievementEvent {
   type: "achievement";
@@ -34,12 +35,13 @@ interface Settings {
   events_path: string;
   show_secrets?: boolean;
   achievement_language?: string;
+  plugin_language?: string;
   resolved_path?: string;
 }
 
 const getSettings = callable<[], Settings>("get_settings");
 const setSettings = callable<[boolean, number, string], Settings>("set_settings");
-const testNotification = callable<[], void>("test_notification");
+const testNotification = callable<[string], void>("test_notification");
 
 interface TitleSummary {
   titleId: string;
@@ -83,7 +85,40 @@ const setShowSecrets = callable<[boolean], boolean>("set_show_secrets");
 const getAchievementLanguages = callable<[], { data: string; label: string }[]>("get_achievement_languages");
 const setAchievementLanguage = callable<[string], string>("set_achievement_language");
 
+const savePluginLanguage = callable<[string], string>("set_plugin_language");
+
+function usePluginTranslation() {
+  const locale = useSyncExternalStore(subscribeLanguage, getPluginLanguage);
+  const preference = useSyncExternalStore(subscribeLanguage, getPluginLanguagePreference);
+  return { locale, preference, t: (message: Message, values?: Record<string, string | number>) => translate(locale, message, values) };
+}
+
+function PluginTitle() {
+  const { t } = usePluginTranslation();
+  return <div className={staticClasses.Title}>{t("Nexus Achievements")}</div>;
+}
+
+function PluginLanguageSelector() {
+  const { preference, t } = usePluginTranslation();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(false);
+  return <div>
+    <DropdownItem label={t("Plugin language")} description={t("Changes the plugin interface only.")}
+      selectedOption={preference} rgOptions={pluginLanguages.map(option => option.data === "system" ? { ...option, label: t("SteamOS language") } : option)}
+      onChange={async option => {
+        if (saving) return;
+        setSaving(true); setError(false);
+        try { setPluginLanguage(await savePluginLanguage(option.data)); }
+        catch { setError(true); }
+        finally { setSaving(false); }
+      }} />
+    {saving && <div role="status">{t("Changing language…")}</div>}
+    {error && <div role="alert">{t("Could not save plugin language.")}</div>}
+  </div>;
+}
+
 function AchievementLanguageSelector({ onChange }: { onChange?: () => void }) {
+  const { locale, t } = usePluginTranslation();
   const [language, setLanguage] = useState("");
   const [options, setOptions] = useState<{ data: string; label: string }[]>([]);
   const [error, setError] = useState("");
@@ -97,9 +132,9 @@ function AchievementLanguageSelector({ onChange }: { onChange?: () => void }) {
   }, []);
   return (
     <div>
-      {options.length > 0 && <DropdownItem label="Achievement language"
-        description="Names and descriptions only. Xbox may use a fallback when a translation is unavailable."
-        rgOptions={options} selectedOption={language}
+      {options.length > 0 && <DropdownItem label={t("Achievement language")}
+        description={t("Names and descriptions only. Xbox may use a fallback when a translation is unavailable.")}
+        rgOptions={options.map(option => option.data ? option : { ...option, label: t("Original (saved by Nexus)") })} selectedOption={language}
         onChange={async option => {
           if (saving) return;
           setSaving(true); setError("");
@@ -111,8 +146,8 @@ function AchievementLanguageSelector({ onChange }: { onChange?: () => void }) {
           catch { setError("Could not save achievement language."); }
           finally { setSaving(false); }
         }} />}
-      {saving && <div role="status">Changing language…</div>}
-      {error && <div role="alert">{error}</div>}
+      {saving && <div role="status">{t("Changing language…")}</div>}
+      {error && <div role="alert">{translateError(locale, error)}</div>}
     </div>
   );
 }
@@ -133,7 +168,7 @@ function showAchievement(event: AchievementEvent) {
     ? <img src={event.iconUrl} style={{ width: 48, height: 48, borderRadius: 4 }} />
     : <FaTrophy />;
   toaster.toast({
-    title: `Achievement unlocked: ${event.name}`,
+    title: translate(getPluginLanguage(), "Achievement unlocked: {name}", { name: event.name }),
     body,
     logo,
     duration: currentDuration,
@@ -158,7 +193,7 @@ const SORTS = [
 ];
 
 const safeIcon = (url: string) => (/^https?:\/\//.test(url) ? url : "");
-const fmtDate = (ms: number | null) => (ms ? new Date(ms).toLocaleString() : "");
+const fmtDate = (ms: number | null) => (ms ? new Date(ms).toLocaleString(pluginLocales[getPluginLanguage()]) : "");
 
 function Icon({ url }: { url: string }) {
   const src = safeIcon(url);
@@ -177,8 +212,9 @@ function GameCover({ url }: { url?: string }) {
 }
 
 function GamerscoreIcon() {
+  const { t } = usePluginTranslation();
   return (
-    <svg viewBox="0 0 24 24" width="1em" height="1em" role="img" aria-label="Gamerscore"
+    <svg viewBox="0 0 24 24" width="1em" height="1em" role="img" aria-label={t("Gamerscore")}
       style={{ display: "inline-block", verticalAlign: "-0.15em", flexShrink: 0 }}>
       <circle cx="12" cy="12" r="11" style={{ fill: "#fff" }} />
       <path d="M16 8.5a5 5 0 1 0 .5 6.5V12H12" style={{ fill: "none", stroke: "#182726", strokeWidth: 2.2 }} />
@@ -187,29 +223,30 @@ function GamerscoreIcon() {
 }
 
 function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boolean; onToggle: () => void }) {
+  const { t } = usePluginTranslation();
   const hidden = a.secret && !a.unlocked && !reveal;
   const revealed = a.secret && !a.unlocked && reveal;
-  const name = a.name || "Unnamed achievement";
-  const description = a.description || (revealed ? "Details unavailable for this secret achievement." : "");
+  const name = a.name || t("Unnamed achievement");
+  const description = a.description || (revealed ? t("Details unavailable for this secret achievement.") : "");
   return (
     <Focusable style={{ display: "flex", gap: 12, padding: "8px 0", opacity: a.unlocked ? 1 : 0.65 }}>
       <Icon url={hidden ? "" : a.iconUrl} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: "bold" }}>{hidden ? "Secret achievement" : name}</div>
-        <div style={{ fontSize: 13, opacity: 0.8 }}>{hidden ? "Keep playing to reveal this achievement." : description}</div>
+        <div style={{ fontWeight: "bold" }}>{hidden ? t("Secret achievement") : name}</div>
+        <div style={{ fontSize: 13, opacity: 0.8 }}>{hidden ? t("Keep playing to reveal this achievement.") : description}</div>
         {!a.unlocked && a.progress !== null && !hidden && (
           <div style={{ marginTop: 4, height: 6, background: "rgba(255,255,255,0.15)", borderRadius: 3 }}>
             <div style={{ width: `${a.progress}%`, height: "100%", background: "#1a9fff", borderRadius: 3 }} />
           </div>
         )}
-        {a.unlocked && a.unlockedAt && <div style={{ fontSize: 12, opacity: 0.7 }}>Unlocked {fmtDate(a.unlockedAt)}</div>}
+        {a.unlocked && a.unlockedAt && <div style={{ fontSize: 12, opacity: 0.7 }}>{t("Unlocked {date}", { date: fmtDate(a.unlockedAt) })}</div>}
         {!a.unlocked && a.progress !== null && !hidden && <div style={{ fontSize: 12, opacity: 0.7 }}>{a.progress}%</div>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
         <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}>{hidden ? "?" : a.gamerscore} <GamerscoreIcon /></div>
         {a.secret && !a.unlocked && (
           <DialogButton
-            aria-label={reveal ? "Hide secret achievement" : "Show secret achievement"}
+            aria-label={reveal ? t("Hide secret achievement") : t("Show secret achievement")}
             style={{ width: "auto", minWidth: 0, height: 32, padding: "0 12px", display: "flex", alignItems: "center", justifyContent: "center" }}
             onClick={onToggle}>
             {reveal ? <FaEyeSlash /> : <FaEye />}
@@ -221,6 +258,7 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
 }
 
 function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () => void; tick: number }) {
+  const { locale, t } = usePluginTranslation();
   const [languageRevision, setLanguageRevision] = useState(0);
   const [reveal, setReveal] = useState(false);
   useEffect(() => {
@@ -266,23 +304,23 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
 
   return (
     <div>
-      <ButtonItem layout="below" onClick={onBack}>← All titles</ButtonItem>
+      <ButtonItem layout="below" onClick={onBack}>{t("← All titles")}</ButtonItem>
       <div style={{ display: "flex", alignItems: "center", gap: 16, margin: "8px 0" }}><GameCover url={title.coverUrl} /><h2>{title.titleName}</h2></div>
       <div style={{ opacity: 0.8, marginBottom: 8 }}>
-        {title.unlocked}/{title.total} unlocked • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon />
+        {t("{unlocked}/{total} unlocked", { unlocked: title.unlocked, total: title.total })} • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon />
       </div>
-      <DropdownItem label="Filter" rgOptions={FILTERS} selectedOption={filter}
+      <DropdownItem label={t("Filter")} rgOptions={FILTERS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={filter}
         onChange={o => setFilter(o.data as Filter)} />
-      <DropdownItem label="Sort by" rgOptions={SORTS} selectedOption={sort}
+      <DropdownItem label={t("Sort by")} rgOptions={SORTS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={sort}
         onChange={o => setSort(o.data as Sort)} />
       <AchievementLanguageSelector onChange={() => setLanguageRevision(value => value + 1)} />
-      <ToggleField label="Show secret achievements" description="Reveal names and descriptions of locked secret achievements."
+      <ToggleField label={t("Show secret achievements")} description={t("Reveal names and descriptions of locked secret achievements.")}
         checked={reveal} onChange={toggleReveal} />
-      <TextField label="Search" value={query} onChange={e => setQuery(e.target.value)} />
-      {!detail && <div style={{ padding: 16 }}>Loading…</div>}
-      {detail && !detail.ok && <div style={{ padding: 16 }}>Could not load achievements ({detail.error}).</div>}
-      {detail?.languageError && <div role="alert" style={{ padding: 16 }}>Showing original achievement text. {detail.languageError}</div>}
-      {detail?.ok && rows.length === 0 && <div style={{ padding: 16, opacity: 0.7 }}>No achievements match.</div>}
+      <TextField label={t("Search")} value={query} onChange={e => setQuery(e.target.value)} />
+      {!detail && <div style={{ padding: 16 }}>{t("Loading…")}</div>}
+      {detail && !detail.ok && <div style={{ padding: 16 }}>{t("Could not load achievements ({error}).", { error: translateError(locale, detail.error) })}</div>}
+      {detail?.languageError && <div role="alert" style={{ padding: 16 }}>{t("Showing original achievement text. {error}", { error: translateError(locale, detail.languageError) })}</div>}
+      {detail?.ok && rows.length === 0 && <div style={{ padding: 16, opacity: 0.7 }}>{t("No achievements match.")}</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {rows.map(a => <AchievementRow key={a.id || a.name} a={a} reveal={isRevealed(a)}
           onToggle={() => setOverrides(o => ({ ...o, [a.id]: !isRevealed(a) }))} />)}
@@ -308,17 +346,18 @@ function RunningGame({ onSelect, showPlayingText = false, flushCover = false }: 
 function TitleRow({ title, onSelect, playing = false, showPlayingText = false, flushCover = false }: {
   title: TitleSummary; onSelect: (titleId: string) => void; playing?: boolean; showPlayingText?: boolean; flushCover?: boolean;
 }) {
+  const { t } = usePluginTranslation();
   const content = (
     <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left" }}>
       <GameCover url={title.coverUrl} />
       <div style={{ flex: 1, minWidth: 0, whiteSpace: "normal", paddingRight: flushCover ? 12 : 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ flex: 1, minWidth: 0 }}>{title.titleName}</span>
-          {playing && <span aria-label="Now playing" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0, color: "#8fdb8f", fontSize: 12, whiteSpace: "nowrap" }}>
-            <FaPlay aria-hidden="true" />{showPlayingText && "Now playing"}
+          {playing && <span aria-label={t("Now playing")} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0, color: "#8fdb8f", fontSize: 12, whiteSpace: "nowrap" }}>
+            <FaPlay aria-hidden="true" />{showPlayingText && t("Now playing")}
           </span>}
         </div>
-        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>{title.unlocked}/{title.total} unlocked • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon /></div>
+        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>{t("{unlocked}/{total} unlocked", { unlocked: title.unlocked, total: title.total })} • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon /></div>
       </div>
     </div>
   );
@@ -328,6 +367,7 @@ function TitleRow({ title, onSelect, playing = false, showPlayingText = false, f
 }
 
 function AchievementsPage() {
+  const { locale, t } = usePluginTranslation();
   const [titles, setTitles] = useState<TitleSummary[] | null>(() => gamesCache.peek("titles") ?? null);
   const [gameQuery, setGameQuery] = useState("");
   const [error, setError] = useState("");
@@ -368,21 +408,21 @@ function AchievementsPage() {
         <TitleView key={title.titleId} title={title} tick={tick} onBack={() => setSelected(null)} />
       ) : (
         <div>
-          <h1 style={{ margin: "0 0 12px" }}>Nexus Achievements</h1>
+          <h1 style={{ margin: "0 0 12px" }}>{t("Nexus Achievements")}</h1>
           <div style={{ marginBottom: 8 }}><RunningGame onSelect={setSelected} showPlayingText flushCover /></div>
-          <TextField label="Search games" value={gameQuery} onChange={event => setGameQuery(event.target.value)} />
-          {titles === null && <div>Loading…</div>}
-          {error && <div style={{ padding: 8 }}>Error: {error}</div>}
+          <TextField label={t("Search games")} value={gameQuery} onChange={event => setGameQuery(event.target.value)} />
+          {titles === null && <div>{t("Loading…")}</div>}
+          {error && <div style={{ padding: 8 }}>{translateError(locale, error)}</div>}
           {titles && titles.length === 0 && !error && (
-            <div style={{ opacity: 0.7 }}>No achievements yet. Play a Nexus game to start unlocking.</div>
+            <div style={{ opacity: 0.7 }}>{t("No achievements yet. Play a Nexus game to start unlocking.")}</div>
           )}
           {titles && titles.length > 0 && matchingTitles.length === 0 && !error && (
-            <div style={{ padding: "12px 0", opacity: 0.7 }}>No games match your search.</div>
+            <div style={{ padding: "12px 0", opacity: 0.7 }}>{t("No games match your search.")}</div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {matchingTitles.map(t => <TitleRow key={t.titleId} title={t} onSelect={setSelected} flushCover />)}
           </div>
-          <ButtonItem layout="below" onClick={reload}>Refresh</ButtonItem>
+          <ButtonItem layout="below" onClick={reload}>{t("Refresh")}</ButtonItem>
         </div>
       )}
     </div>
@@ -390,10 +430,11 @@ function AchievementsPage() {
 }
 
 function Content() {
+  const { t } = usePluginTranslation();
   const [settings, setLocal] = useState<Settings | null>(null);
 
   useEffect(() => {
-    getSettings().then(s => { currentDuration = s.duration; setLocal(s); });
+    getSettings().then(s => { currentDuration = s.duration; setPluginLanguage(s.plugin_language || "system"); setLocal(s); });
   }, []);
 
   if (!settings) return null;
@@ -406,49 +447,53 @@ function Content() {
   };
 
   return (
-    <PanelSection title="Nexus Achievements">
+    <PanelSection title={t("Nexus Achievements")}>
       <PanelSectionRow>
         <RunningGame flushCover onSelect={titleId => { requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
       </PanelSectionRow>
       <PanelSectionRow>
         <ButtonItem layout="below" onClick={() => { Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }}>
-          View all achievements
+          {t("View all achievements")}
         </ButtonItem>
       </PanelSectionRow>
       <PanelSectionRow>
-        <ToggleField label="Enable notifications" checked={settings.enabled}
+        <ToggleField label={t("Enable notifications")} checked={settings.enabled}
           onChange={enabled => update({ enabled })} />
       </PanelSectionRow>
       <PanelSectionRow>
         <AchievementLanguageSelector />
       </PanelSectionRow>
       <PanelSectionRow>
-        <SliderField label="Duration (seconds)" min={2} max={30} step={1}
+        <SliderField label={t("Duration (seconds)")} min={2} max={30} step={1}
           value={Math.round(settings.duration / 1000)} showValue
           onChange={seconds => update({ duration: seconds * 1000 })} />
       </PanelSectionRow>
       <PanelSectionRow>
-        <ButtonItem layout="below" onClick={() => testNotification()}>
-          Send test notification
+        <ButtonItem layout="below" onClick={() => testNotification(getPluginLanguage())}>
+          {t("Send test notification")}
         </ButtonItem>
       </PanelSectionRow>
       <PanelSectionRow>
         <div style={{ fontSize: 11, opacity: 0.7, wordBreak: "break-all" }}>
-          Watching: {settings.resolved_path}
+          {t("Watching: {path}", { path: settings.resolved_path || "" })}
         </div>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <PluginLanguageSelector />
       </PanelSectionRow>
     </PanelSection>
   );
 }
 
 export default definePlugin(() => {
-  getSettings().then(s => { currentDuration = s.duration; }).catch(() => {});
+  void initializeSystemLanguage(() => window.SteamClient.Settings.GetCurrentLanguage());
+  getSettings().then(s => { currentDuration = s.duration; setPluginLanguage(s.plugin_language || "system"); }).catch(() => {});
   routerHook.addRoute(ROUTE, AchievementsPage, { exact: true });
   const listener = addEventListener<[AchievementEvent]>("achievement", showAchievement);
 
   return {
     name: "Nexus Achievements",
-    titleView: <div className={staticClasses.Title}>Nexus Achievements</div>,
+    titleView: <PluginTitle />,
     content: <Content />,
     icon: <FaTrophy />,
     onDismount() {
