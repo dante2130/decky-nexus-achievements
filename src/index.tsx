@@ -14,6 +14,7 @@ import {
 import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster } from "@decky/api";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaEye, FaEyeSlash, FaPlay, FaTrophy } from "react-icons/fa";
+import { SessionCache } from "./cache";
 
 interface AchievementEvent {
   type: "achievement";
@@ -74,6 +75,9 @@ interface TitleDetail {
 
 const listTitles = callable<[], { ok: boolean; error?: string; titles: TitleSummary[] }>("list_titles");
 const getTitleAchievements = callable<[string], TitleDetail>("get_title_achievements");
+const achievementCache = new SessionCache<TitleDetail>();
+const gamesCache = new SessionCache<TitleSummary[]>();
+const achievementCacheKey = (title: TitleSummary) => `${title.titleId}:${title.updatedAt}`;
 
 const setShowSecrets = callable<[boolean], boolean>("set_show_secrets");
 const getAchievementLanguages = callable<[], { data: string; label: string }[]>("get_achievement_languages");
@@ -99,7 +103,11 @@ function AchievementLanguageSelector({ onChange }: { onChange?: () => void }) {
         onChange={async option => {
           if (saving) return;
           setSaving(true); setError("");
-          try { setLanguage(await setAchievementLanguage(option.data)); onChange?.(); }
+          try {
+            setLanguage(await setAchievementLanguage(option.data));
+            achievementCache.clear();
+            onChange?.();
+          }
           catch { setError("Could not save achievement language."); }
           finally { setSaving(false); }
         }} />}
@@ -117,6 +125,8 @@ const getRunningTitle = callable<[], TitleSummary | null>("get_running_title");
 let currentDuration = 8000;
 
 function showAchievement(event: AchievementEvent) {
+  achievementCache.clear();
+  gamesCache.invalidate("titles");
   const score = typeof event.gamerscore === "number" ? `${event.gamerscore} G` : "";
   const body = [event.description, score].filter(Boolean).join(" • ");
   const logo = event.iconUrl && /^https?:\/\//.test(event.iconUrl)
@@ -161,8 +171,8 @@ function GameCover({ url }: { url?: string }) {
   const src = safeIcon(url || "");
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
-  return <div style={{ width: 60, height: 80, flexShrink: 0, borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-    {src && !failed ? <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <FaTrophy size={24} />}
+  return <div style={{ width: 60, height: 80, flexShrink: 0, borderRadius: 4, overflow: "hidden", transform: "translateZ(0)", isolation: "isolate", background: "rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    {src && !failed ? <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} style={{ width: "100%", height: "100%", objectFit: "cover", imageRendering: "auto", display: "block" }} /> : <FaTrophy size={24} />}
   </div>;
 }
 
@@ -220,19 +230,23 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const toggleReveal = (v: boolean) => { setReveal(v); setOverrides({}); setShowSecrets(v).catch(() => {}); };
   const isRevealed = (a: Achievement) => overrides[a.id] ?? reveal;
-  const [detail, setDetail] = useState<TitleDetail | null>(null);
+  const [detail, setDetail] = useState<TitleDetail | null>(() => achievementCache.peek(achievementCacheKey(title)) ?? null);
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("name");
   const [query, setQuery] = useState("");
 
   useEffect(() => {
     let live = true;
-    setDetail(null);
-    getTitleAchievements(title.titleId)
+    const key = achievementCacheKey(title);
+    achievementCache.load(key, async () => {
+      const result = await getTitleAchievements(title.titleId);
+      if (!result.ok) throw new Error(result.error || "Failed to load");
+      return result;
+    }, 60_000, result => !result.languageError)
       .then(d => { if (live) setDetail(d); })
-      .catch(() => { if (live) setDetail({ ok: false, error: "Failed to load", achievements: [] }); });
+      .catch(() => { if (live) setDetail(previous => previous?.ok ? previous : { ok: false, error: "Failed to load", achievements: [] }); });
     return () => { live = false; };
-  }, [title.titleId, tick, languageRevision]);
+  }, [title.titleId, title.updatedAt, tick, languageRevision]);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -269,13 +283,15 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
       {detail && !detail.ok && <div style={{ padding: 16 }}>Could not load achievements ({detail.error}).</div>}
       {detail?.languageError && <div role="alert" style={{ padding: 16 }}>Showing original achievement text. {detail.languageError}</div>}
       {detail?.ok && rows.length === 0 && <div style={{ padding: 16, opacity: 0.7 }}>No achievements match.</div>}
-      {rows.map(a => <AchievementRow key={a.id || a.name} a={a} reveal={isRevealed(a)}
-        onToggle={() => setOverrides(o => ({ ...o, [a.id]: !isRevealed(a) }))} />)}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {rows.map(a => <AchievementRow key={a.id || a.name} a={a} reveal={isRevealed(a)}
+          onToggle={() => setOverrides(o => ({ ...o, [a.id]: !isRevealed(a) }))} />)}
+      </div>
     </div>
   );
 }
 
-function RunningGame({ onSelect, showPlayingText = false }: { onSelect: (titleId: string) => void; showPlayingText?: boolean }) {
+function RunningGame({ onSelect, showPlayingText = false, flushCover = false }: { onSelect: (titleId: string) => void; showPlayingText?: boolean; flushCover?: boolean }) {
   const [title, setTitle] = useState<TitleSummary | null>(null);
   useEffect(() => {
     let live = true;
@@ -286,16 +302,16 @@ function RunningGame({ onSelect, showPlayingText = false }: { onSelect: (titleId
     return () => { live = false; clearInterval(timer); };
   }, []);
   if (!title) return null;
-  return <TitleRow title={title} onSelect={onSelect} playing showPlayingText={showPlayingText} />;
+  return <TitleRow title={title} onSelect={onSelect} playing showPlayingText={showPlayingText} flushCover={flushCover} />;
 }
 
-function TitleRow({ title, onSelect, playing = false, showPlayingText = false }: {
-  title: TitleSummary; onSelect: (titleId: string) => void; playing?: boolean; showPlayingText?: boolean;
+function TitleRow({ title, onSelect, playing = false, showPlayingText = false, flushCover = false }: {
+  title: TitleSummary; onSelect: (titleId: string) => void; playing?: boolean; showPlayingText?: boolean; flushCover?: boolean;
 }) {
-  return <ButtonItem layout="below" onClick={() => onSelect(title.titleId)}>
+  const content = (
     <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left" }}>
       <GameCover url={title.coverUrl} />
-      <div style={{ flex: 1, minWidth: 0, whiteSpace: "normal" }}>
+      <div style={{ flex: 1, minWidth: 0, whiteSpace: "normal", paddingRight: flushCover ? 12 : 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ flex: 1, minWidth: 0 }}>{title.titleName}</span>
           {playing && <span aria-label="Now playing" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0, color: "#8fdb8f", fontSize: 12, whiteSpace: "nowrap" }}>
@@ -305,19 +321,28 @@ function TitleRow({ title, onSelect, playing = false, showPlayingText = false }:
         <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>{title.unlocked}/{title.total} unlocked • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon /></div>
       </div>
     </div>
-  </ButtonItem>;
+  );
+  return flushCover
+    ? <DialogButton style={{ width: "100%", height: "auto", minHeight: 80, padding: 4, overflow: "hidden" }} onClick={() => onSelect(title.titleId)}>{content}</DialogButton>
+    : <ButtonItem layout="below" onClick={() => onSelect(title.titleId)}>{content}</ButtonItem>;
 }
 
 function AchievementsPage() {
-  const [titles, setTitles] = useState<TitleSummary[] | null>(null);
+  const [titles, setTitles] = useState<TitleSummary[] | null>(() => gamesCache.peek("titles") ?? null);
+  const [gameQuery, setGameQuery] = useState("");
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string | null>(() => { const title = requestedTitle; requestedTitle = null; return title; });
   const [tick, setTick] = useState(0);
 
   const reload = useCallback(() => {
-    listTitles()
-      .then(r => { setTitles(r.titles); setError(r.ok ? "" : r.error ?? "error"); })
-      .catch(() => { setTitles([]); setError("Failed to load"); });
+    // Recheck lightweight snapshot metadata while retaining the visible list.
+    gamesCache.load("titles", async () => {
+      const result = await listTitles();
+      if (!result.ok) throw new Error(result.error || "Failed to load");
+      return result.titles;
+    }, 0)
+      .then(value => { setTitles(value); setError(""); })
+      .catch(() => { setTitles(previous => previous ?? []); setError("Failed to refresh games"); });
   }, []);
 
   useEffect(() => { reload(); }, [reload, tick]);
@@ -332,21 +357,31 @@ function AchievementsPage() {
   }, []);
 
   const title = titles?.find(t => t.titleId === selected);
+  const matchingTitles = useMemo(() => {
+    const query = gameQuery.trim().toLocaleLowerCase();
+    return titles?.filter(item => item.titleName.toLocaleLowerCase().includes(query)) ?? [];
+  }, [titles, gameQuery]);
 
   return (
-    <div style={{ padding: "40px 24px 24px", marginTop: 40, height: "100%", overflowY: "auto", boxSizing: "border-box" }}>
+    <div style={{ padding: "40px 24px 60px", marginTop: 40, height: "100%", overflowY: "auto", scrollPaddingBottom: 60, boxSizing: "border-box" }}>
       {title ? (
-        <TitleView title={title} tick={tick} onBack={() => setSelected(null)} />
+        <TitleView key={title.titleId} title={title} tick={tick} onBack={() => setSelected(null)} />
       ) : (
         <div>
           <h1 style={{ margin: "0 0 12px" }}>Nexus Achievements</h1>
-          <RunningGame onSelect={setSelected} showPlayingText />
+          <div style={{ marginBottom: 8 }}><RunningGame onSelect={setSelected} showPlayingText flushCover /></div>
+          <TextField label="Search games" value={gameQuery} onChange={event => setGameQuery(event.target.value)} />
           {titles === null && <div>Loading…</div>}
           {error && <div style={{ padding: 8 }}>Error: {error}</div>}
           {titles && titles.length === 0 && !error && (
             <div style={{ opacity: 0.7 }}>No achievements yet. Play a Nexus game to start unlocking.</div>
           )}
-          {titles?.map(t => <TitleRow key={t.titleId} title={t} onSelect={setSelected} />)}
+          {titles && titles.length > 0 && matchingTitles.length === 0 && !error && (
+            <div style={{ padding: "12px 0", opacity: 0.7 }}>No games match your search.</div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {matchingTitles.map(t => <TitleRow key={t.titleId} title={t} onSelect={setSelected} flushCover />)}
+          </div>
           <ButtonItem layout="below" onClick={reload}>Refresh</ButtonItem>
         </div>
       )}
@@ -373,7 +408,7 @@ function Content() {
   return (
     <PanelSection title="Nexus Achievements">
       <PanelSectionRow>
-        <RunningGame onSelect={titleId => { requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
+        <RunningGame flushCover onSelect={titleId => { requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
       </PanelSectionRow>
       <PanelSectionRow>
         <ButtonItem layout="below" onClick={() => { Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }}>
@@ -417,6 +452,8 @@ export default definePlugin(() => {
     content: <Content />,
     icon: <FaTrophy />,
     onDismount() {
+      achievementCache.clear();
+      gamesCache.clear();
       removeEventListener("achievement", listener);
       routerHook.removeRoute(ROUTE);
     },

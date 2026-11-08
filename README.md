@@ -38,6 +38,13 @@ in `~/.local/share/nexus-launcher/achievements/` (`index.json` plus
 `<titleId>.json`), overridable with `NEXUS_ACHIEVEMENTS_DIR`. The page refreshes
 when a new achievement event arrives.
 
+The viewer keeps game and achievement lists in memory for the plugin session.
+Reopening a list displays cached rows immediately. Achievement responses are
+reused for up to one minute; stale lists stay visible during background refreshes.
+Snapshot changes, unlock notifications, and language changes refresh the relevant
+data. Failed refreshes retain the previous rows. The cache holds at most 32
+achievement snapshots and is cleared when the plugin unloads.
+
 Game rows share a cover, left-aligned title, and achievement progress underneath.
 The launcher exports Store display names and cover URLs, falling back to the
 installed title when Store metadata is unavailable. Restart an updated launcher
@@ -88,6 +95,8 @@ Panel options: enable, toast duration, test notification.
 ## Tests
 
 `python3 -m unittest discover -s tests`
+
+Frontend cache tests (Node.js 24): `npm run test:cache`.
 
 ## Limitations
 

@@ -4,6 +4,7 @@
   "description": "Achievement notifications for Nexus runtime games on Steam Deck.",
   "type": "module",
   "scripts": {
+    "test:cache": "node --test tests/cache.test.mjs",
     "build": "rollup -c",
     "watch": "rollup -c -w"
   },
