@@ -217,10 +217,9 @@ A separate **TrueAchievements filter** lists only flag types present in the game
 and combines with unlock-state and achievement-set filters. Clicking a badge applies
 its flag filter. Selections persist per game; previous TA filter preferences migrate
 to the separate field. Filter rows share a flat group with no internal gaps or
-separators. Sorting and direction arrows share a row, with language on its own row.
+separators. Sorting and direction arrows share a row, with language and tracker options on separate rows.
 
-Left/right moves between badges; up/down moves within the TA guide/reveal button
-column. X toggles a locked secret achievement, and RB opens the focused row's guide.
+Left/right moves between badges and between the horizontal achievement action buttons. X toggles a locked secret achievement, and RB opens the focused row's guide.
 Holding either shortcut does not repeat its action. Secret text, badges, and guide
 buttons stay hidden until revealed; RB explicitly opens a guide even on a hidden row.
 Missable badges are red, and all row buttons share readable focus colors. The
@@ -251,3 +250,39 @@ TA processing runs in an isolated worker using `/usr/bin/python3` on Steam Deck,
 avoiding standard-library modules absent from Decky's frozen Python. Browser session
 connection requires `aiohttp` in the system Python environment. Optional TA failures
 cannot prevent the core plugin from loading.
+
+### Favorites and achievement tracker
+
+Press **Y** on an achievement row, or use its star button, to add or remove a favorite.
+Favorites appear in their own group above the remaining achievements, without duplicate
+rows. They follow the current search, sorting, and filters and persist per game.
+Favoriting does not start tracking.
+
+Use the pin button on a locked achievement to track it. Tracking is a separate selection
+limited to **five achievements per game**. Pinning does not enable the overlay; use the
+**Achievement tracker** toggle when you want it visible. Unlocked achievements cannot
+be favorited, unfavorited, or tracked and no longer appear in the Favorites group. Unpinning or
+unlocking an achievement removes it from the overlay and frees a tracking slot.
+
+The tracker requests Steam notification composition without replacing the running game's
+composition queue. It displays only the running Nexus game's selected achievements in a persistent,
+non-focusable child browser view on Steam’s notification layer. Its compact layout shows names and
+reported progress bars; games that do not report progress display no invented percentage.
+Locked secret details remain hidden unless the global reveal preference is enabled.
+It reads local snapshots every 1.5 seconds and refreshes Xbox progress in the background
+at most once every 15 seconds while tracked achievements are active. Offline refresh
+failures retain the last available snapshot.
+
+The **Achievement tracker** toggle is available in the game view and plugin settings.
+Both views provide eight screen positions, a displayed count from one to five, and
+whole-widget opacity from 20% to 100%. **Hide achievement tracker** appears at the top of the plugin panel
+and in plugin-panel tracker controls; hiding is immediate, even if saving fails. The overlay hides
+automatically while Steam menus or the main UI are open. Disabling the tracker preserves its selections. The overlay closes
+when the game stops or no selected locked achievements remain; it never takes gamepad
+focus. If Steam's browser-view API is unavailable, selections remain saved and the settings show
+a retry button. Plugin unload closes the popup and stops its timers and background jobs.
+
+Achievement rows display progress bars spanning 65% of the row, with the percentage
+beside them. Unknown progress is labeled unavailable; locked secret progress remains hidden.
+Normal, rare, and Mythic notifications use Steam’s default sound when their category
+has no custom audio file. Custom audio suppresses native playback to avoid duplication.

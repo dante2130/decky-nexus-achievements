@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 # Decky loads main.py by filename without adding the plugin directory to sys.path.
@@ -26,7 +27,7 @@ except ImportError:  # unit tests run outside Decky Loader
 DEFAULT_RELATIVE = ".local/share/nexus-launcher/achievement-events.jsonl"
 POLL_SECONDS = 0.5
 MAX_LINE = 64 * 1024
-DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": "", "plugin_language": "system", "group_achievements": False, "game_view_settings": {}, "remember_game_view_settings": True, "test_notification_type": "normal", "notification_sounds": {}, "notification_durations": {}, "notification_sound_durations": {}, "installed_games_only": False, "game_menu_button": True, "profile_gamerscore": False}
+DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": "", "plugin_language": "system", "group_achievements": False, "game_view_settings": {}, "remember_game_view_settings": True, "test_notification_type": "normal", "notification_sounds": {}, "notification_durations": {}, "notification_sound_durations": {}, "installed_games_only": False, "game_menu_button": True, "profile_gamerscore": False, "favorite_achievements": {}, "tracked_achievements": {}, "tracker_options": {"enabled": False, "position": "upper-right", "opacity": 75, "count": 5}}
 
 
 AUDIO_MIMES = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".flac": "audio/flac"}
@@ -369,6 +370,170 @@ class Plugin:
 
     async def get_running_title(self) -> Optional[Dict[str, Any]]:
         return get_running_title()
+
+    def _tracker_detail(self, detail: dict) -> dict:
+        cached = getattr(self, "_tracker_progress", {}).get(detail.get("titleId"), {})
+        if time.monotonic() - cached.get("time", 0) > 90:
+            return detail
+        updates = cached.get("items", {})
+        return {**detail, "achievements": [{**item, **updates.get(item["id"], {}),
+            "unlocked": item.get("unlocked", False) or updates.get(item["id"], {}).get("unlocked", False),
+            "progress": None if item.get("unlocked") or updates.get(item["id"], {}).get("unlocked")
+            else updates.get(item["id"], {}).get("progress", item.get("progress"))}
+            for item in detail.get("achievements", [])]}
+
+    async def _read_tracker_progress(self, title_id: str, detail: dict):
+        command, env = backend_command(user_home())
+        code, raw = await run_bounded([*command, "achievements", title_id, "--json"], env)
+        if code:
+            return
+        data = json.loads(raw)
+        if not isinstance(data, dict) or data.get("schema") != 1 or str(data.get("titleId")) != title_id or not isinstance(data.get("items"), list):
+            return
+        known = {item["id"] for item in detail.get("achievements", [])}
+        updates = {}
+        for item in data["items"][:MAX_ACHIEVEMENTS]:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str) or item["id"] not in known:
+                continue
+            state = item.get("state")
+            if state not in ("unlocked", "locked", "in-progress"):
+                continue
+            progress = item.get("progress")
+            updates[item["id"]] = {"unlocked": state == "unlocked", "progress": progress
+                if state != "unlocked" and type(progress) in (int, float) and 0 <= progress <= 100 else None}
+        if not hasattr(self, "_tracker_progress"):
+            self._tracker_progress = {}
+        if len(self._tracker_progress) >= MAX_TITLES:
+            self._tracker_progress.pop(next(iter(self._tracker_progress)))
+        self._tracker_progress[title_id] = {"time": time.monotonic(), "items": updates}
+        completed = {key for key, value in updates.items() if value["unlocked"]}
+        games = self.settings.get("tracked_achievements", {})
+        stored = games.get(title_id, []) if isinstance(games, dict) else []
+        if isinstance(stored, list) and any(isinstance(key, str) and key in completed for key in stored):
+            previous = self.settings
+            self.settings = {**previous, "tracked_achievements": {**games,
+                title_id: [key for key in stored if not isinstance(key, str) or key not in completed]}}
+            try:
+                self._save()
+            except OSError:
+                self.settings = previous
+
+    def _schedule_tracker_refresh(self, title_id: str, detail: dict):
+        if not hasattr(self, "_tracker_refresh_times"):
+            self._tracker_refresh_times = {}
+            self._tracker_jobs = {}
+        if self._tracker_jobs or time.monotonic() - self._tracker_refresh_times.get(title_id, 0) < 15:
+            return
+        if len(self._tracker_refresh_times) >= MAX_TITLES:
+            self._tracker_refresh_times.pop(next(iter(self._tracker_refresh_times)))
+        self._tracker_refresh_times[title_id] = time.monotonic()
+        async def refresh():
+            try:
+                await self._read_tracker_progress(title_id, detail)
+            except Exception:
+                pass  # Keep the last snapshot when Xbox is unavailable.
+            finally:
+                self._tracker_jobs.pop(title_id, None)
+        self._tracker_jobs[title_id] = asyncio.create_task(refresh())
+
+    def _achievement_preferences(self, title_id: str) -> Dict[str, Any]:
+        detail = get_title(title_id)
+        if not detail.get("ok"):
+            raise ValueError("Could not load achievements.")
+        detail = self._tracker_detail(detail)
+        known = {item["id"]: item for item in detail.get("achievements", [])}
+        def saved(key, locked=False):
+            games = self.settings.get(key, {})
+            ids = games.get(title_id, []) if isinstance(games, dict) else []
+            if not isinstance(ids, list):
+                return []
+            return list(dict.fromkeys(item for item in ids if isinstance(item, str) and item in known
+                                      and (not locked or not known[item].get("unlocked"))))
+        return {"favorites": saved("favorite_achievements", True), "tracked": saved("tracked_achievements", True)[:5]}
+
+    async def get_achievement_preferences(self, title_id: str) -> Dict[str, Any]:
+        return self._achievement_preferences(title_id)
+
+    def _set_achievement_selection(self, title_id: str, achievement_id: str, enabled: bool, tracked: bool) -> Dict[str, Any]:
+        preferences = self._achievement_preferences(title_id)
+        detail = get_title(title_id)
+        item = next((item for item in self._tracker_detail(detail).get("achievements", []) if item["id"] == achievement_id), None)
+        if item is None or not isinstance(achievement_id, str) or not achievement_id or not isinstance(enabled, bool):
+            raise ValueError("Invalid achievement selection.")
+        if item.get("unlocked") and (enabled or not tracked):
+            raise ValueError("Unlocked achievements cannot be tracked." if tracked else "Unlocked achievements cannot be favorited.")
+        selection = preferences["tracked" if tracked else "favorites"]
+        selection = [key for key in selection if key != achievement_id]
+        if enabled:
+            if tracked and len(selection) >= 5:
+                raise ValueError("You can track up to five achievements per game.")
+            selection.append(achievement_id)
+        key = "tracked_achievements" if tracked else "favorite_achievements"
+        previous = self.settings
+        games = previous.get(key, {})
+        self.settings = {**previous, key: {**(games if isinstance(games, dict) else {}), title_id: selection}}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return self._achievement_preferences(title_id)
+
+    async def set_achievement_favorite(self, title_id: str, achievement_id: str, enabled: bool) -> Dict[str, Any]:
+        return self._set_achievement_selection(title_id, achievement_id, enabled, False)
+
+    async def set_achievement_tracked(self, title_id: str, achievement_id: str, enabled: bool) -> Dict[str, Any]:
+        return self._set_achievement_selection(title_id, achievement_id, enabled, True)
+
+    async def get_tracker_options(self) -> Dict[str, Any]:
+        raw = self.settings.get("tracker_options", {})
+        if not isinstance(raw, dict):
+            raw = {}
+        position = raw.get("position")
+        count, opacity = raw.get("count"), raw.get("opacity")
+        return {"enabled": raw.get("enabled") is True,
+                "position": position if position in ("upper-left", "center-top", "upper-right", "center-left", "center-right", "lower-left", "center-bottom", "lower-right") else "upper-right",
+                "count": count if type(count) is int and 1 <= count <= 5 else 5,
+                "opacity": opacity if type(opacity) is int and 20 <= opacity <= 100 else 75}
+
+    async def set_tracker_options(self, enabled: bool, position: str, opacity: int, count: int) -> Dict[str, Any]:
+        if (not isinstance(enabled, bool) or position not in ("upper-left", "center-top", "upper-right", "center-left", "center-right", "lower-left", "center-bottom", "lower-right")
+                or type(opacity) is not int or not 20 <= opacity <= 100 or type(count) is not int or not 1 <= count <= 5):
+            raise ValueError("Invalid tracker settings.")
+        previous = self.settings
+        self.settings = {**previous, "tracker_options": {"enabled": enabled, "position": position, "opacity": opacity, "count": count}}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return await self.get_tracker_options()
+
+    async def get_tracker_state(self) -> Dict[str, Any]:
+        options = await self.get_tracker_options()
+        result = {"options": options, "running": None, "achievements": []}
+        if not options["enabled"]:
+            return result
+        running = get_running_title()
+        if not running:
+            return result
+        title_id = running["titleId"]
+        detail = get_title(title_id)
+        if not detail.get("ok"):
+            return result
+        preferences = self._achievement_preferences(title_id)
+        language = self.settings.get("achievement_language", "")
+        detail = self._tracker_detail(detail)
+        if preferences["tracked"]:
+            self._schedule_tracker_refresh(title_id, detail)
+        localized = self._localized_snapshot(detail, language) if language else detail
+        by_id = {item["id"]: item for item in localized.get("achievements", [])}
+        items = [by_id[key] for key in preferences["tracked"][:options["count"]] if key in by_id]
+        # An overlay never exposes a locked secret without the explicit reveal preference.
+        if not self.settings.get("show_secrets"):
+            items = [{**item, "name": "", "description": "", "iconUrl": "", "gamerscore": 0, "progress": None}
+                     if item.get("secret") else item for item in items]
+        return {**result, "running": {"titleId": title_id, "titleName": running["titleName"]}, "achievements": items, "tracked": preferences["tracked"]}
 
     async def get_game_view_settings(self, title_id: str) -> Dict[str, str]:
         if not valid_title_id(title_id):
@@ -823,7 +988,7 @@ class Plugin:
             await self._ta_worker.close()
         if self.task:
             self.task.cancel()
-        jobs = list(getattr(self, "_mythic_jobs", {}).values())
+        jobs = list(getattr(self, "_mythic_jobs", {}).values()) + list(getattr(self, "_tracker_jobs", {}).values())
         if getattr(self, "_mythic_library_task", None):
             jobs.append(self._mythic_library_task)
         for job in jobs:

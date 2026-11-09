@@ -20,9 +20,9 @@ import {
 } from "@decky/ui";
 import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster, openFilePicker, FileSelectionType } from "@decky/api";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { FaEye, FaEyeSlash, FaPlay, FaTrophy, FaSignInAlt, FaLink, FaUnlink, FaExternalLinkAlt, FaSpinner } from "react-icons/fa";
+import { FaEye, FaEyeSlash, FaPlay, FaTrophy, FaSignInAlt, FaLink, FaUnlink, FaExternalLinkAlt, FaSpinner, FaStar, FaRegStar, FaThumbtack } from "react-icons/fa";
 import { fitNotificationPopup } from "./notification-popup";
-import { NotificationAudio, observePopupSound, isNexusToast, type PopupPlayback, type SoundFiles } from "./notification-audio";
+import { NotificationAudio, observePopupSound, shouldSuppressNexusSound, type PopupPlayback, type SoundFiles } from "./notification-audio";
 import { installProfileGamerscore, setProfileGamerscoreEnabled, saveProfileGamerscore, useProfileGamerscore, refreshProfileGamerscore } from "./profile-gamerscore";
 import { installGameMenuButtons, invalidateGameMenuCache, setGameMenuEnabled, saveGameMenuButton, type MenuTarget } from "./game-menu";
 import { RareIcon, MythicIcon, TAIcon } from "./achievement-icons";
@@ -31,6 +31,9 @@ import { SessionCache } from "./cache";
 import { taFlags, matchesTAFlag, flagsForGame } from "./ta-flags";
 import { matchesAchievementSet, type AchievementSet } from "./achievement-filters";
 import { getPluginLanguage, getPluginLanguagePreference, initializeSystemLanguage, setPluginLanguage, subscribeLanguage, translate, translateError, pluginLanguages, pluginLocales, type Message } from "./i18n";
+
+import { useAchievementPreferences, toggleAchievementFavorite, toggleAchievementTracked, splitFavoriteAchievements, startAchievementTracking, refreshTrackerState } from "./achievement-tracking";
+import { AchievementTrackerOverlay, TrackerControls, HideTrackerButton, trackingError as formatTrackingError } from "./achievement-tracker";
 
 interface AchievementEvent {
   type: "achievement";
@@ -443,7 +446,7 @@ async function showAchievement(event: AchievementEvent) {
     body,
     logo,
     duration: Math.max(notificationDurations[kind] ?? currentDuration, soundLength),
-    playSound: false,
+    playSound: !notificationAudio.has(kind),
     showToast: true,
   });
 }
@@ -460,7 +463,7 @@ async function showMythic(event: MythicEvent) {
     contentClassName: "nexus-notification-content",
     title: translate(getPluginLanguage(), "Mythic achievement unlocked"),
     body: translate(getPluginLanguage(), "Unlocked all {total} original achievements in {game}.", { total: event.mythic.totalCount, game: event.titleName }),
-    logo: <NotificationIcon url={event.iconUrl} mythic playback={{ kind: "mythic", played: false }} />, duration: Math.max(notificationDurations.mythic ?? currentDuration, soundLength), playSound: false, showToast: true,
+    logo: <NotificationIcon url={event.iconUrl} mythic playback={{ kind: "mythic", played: false }} />, duration: Math.max(notificationDurations.mythic ?? currentDuration, soundLength), playSound: !notificationAudio.has("mythic"), showToast: true,
   });
 }
 
@@ -565,11 +568,12 @@ function GamerscoreIcon() {
   );
 }
 
-function AchievementRow({ a, ta, reveal, onToggle, onFlag }: { a: Achievement; ta?: TAAchievement; reveal: boolean; onToggle: () => void; onFlag: (flag: string) => void }) {
+function AchievementRow({ a, ta, reveal, onToggle, onFlag, favorite = false, tracked = false, onFavorite = () => {}, onTrack = () => {} }: { a: Achievement; ta?: TAAchievement; reveal: boolean; onToggle: () => void; onFlag: (flag: string) => void; favorite?: boolean; tracked?: boolean; onFavorite?: () => void; onTrack?: () => void }) {
   const { locale, t } = usePluginTranslation();
   const rowRef = useRef<HTMLDivElement>(null);
   const hasRevealButton = a.secret && !a.unlocked;
   const hidden = a.secret && !a.unlocked && !reveal;
+  const progress = a.unlocked ? 100 : a.progress !== null && Number.isFinite(a.progress) ? Math.max(0, Math.min(100, a.progress)) : null;
   const revealed = a.secret && !a.unlocked && reveal;
   const name = a.name || t("Unnamed achievement");
   const description = a.description || (revealed ? t("Details unavailable for this secret achievement.") : "");
@@ -594,16 +598,21 @@ function AchievementRow({ a, ta, reveal, onToggle, onFlag }: { a: Achievement; t
           </DialogButton>)}
         </Focusable>}
         {a.baseGame === false && <div style={{ fontSize: 11, opacity: 0.7 }}>{t("Add-on")}</div>}
-        {!a.unlocked && a.progress !== null && !hidden && (
-          <div style={{ marginTop: 4, height: 6, background: "rgba(255,255,255,0.15)", borderRadius: 3 }}>
-            <div style={{ width: `${a.progress}%`, height: "100%", background: "#1a9fff", borderRadius: 3 }} />
-          </div>
-        )}
         {a.unlocked && a.unlockedAt && <div style={{ fontSize: 12, opacity: 0.7 }}>{t("Unlocked {date}", { date: fmtDate(a.unlockedAt) })}</div>}
-        {!a.unlocked && a.progress !== null && !hidden && <div style={{ fontSize: 12, opacity: 0.7 }}>{a.progress}%</div>}
       </div>
-      <Focusable flow-children="column" className="nexus-achievement-actions" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
         <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}><GamerscoreIcon /> {hidden ? "?" : a.gamerscore}</div>
+        <Focusable flow-children="row" className="nexus-achievement-actions" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {!a.unlocked && <DialogButton className={`nexus-row-action nexus-favorite-button${favorite ? " nexus-favorite-active" : ""}`} noFocusRing disabled={!a.id || a.unlocked}
+          aria-label={t(favorite ? "Remove from favorites" : "Add to favorites")} aria-pressed={favorite}
+          onOKActionDescription={t(favorite ? "Remove from favorites" : "Add to favorites")}
+          style={{ width: "auto", minWidth: 0, height: 32, padding: "0 12px" }} onClick={() => { if (!a.unlocked) onFavorite(); }}>
+          {favorite ? <FaStar /> : <FaRegStar />}
+        </DialogButton>}
+        {!a.unlocked && <DialogButton className={`nexus-row-action nexus-track-button${tracked ? " nexus-track-active" : ""}`} noFocusRing disabled={!a.id}
+          aria-label={t(tracked ? "Stop tracking achievement" : "Track achievement")} aria-pressed={tracked}
+          onOKActionDescription={t(tracked ? "Stop tracking achievement" : "Track achievement")}
+          style={{ width: "auto", minWidth: 0, height: 32, padding: "0 12px" }} onClick={onTrack}><FaThumbtack /></DialogButton>}
         {!hidden && ta && <DialogButton className="nexus-row-action nexus-ta-action nexus-ta-guide" noFocusRing style={{ width: "auto", minWidth: 0, height: 32, padding: "0 12px" }}
           aria-label={t("View on TrueAchievements")} onClick={() => Navigation.NavigateToExternalWeb(ta.url)}><TAIcon size={22} /></DialogButton>}
         {hasRevealButton && (
@@ -620,12 +629,27 @@ function AchievementRow({ a, ta, reveal, onToggle, onFlag }: { a: Achievement; t
             {reveal ? <FaEyeSlash /> : <FaEye />}
           </DialogButton>
         )}
-      </Focusable>
+        </Focusable>
+      </div>
+      {!hidden && <div style={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 8 }}>
+        <div role="progressbar" aria-label={name} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress ?? undefined}
+          aria-valuetext={progress === null ? t("Progress unavailable") : undefined}
+          style={{ width: "65%", flexShrink: 0, height: 6, background: "rgba(255,255,255,.22)", borderRadius: 3, overflow: "hidden" }}>
+          <div style={{ width: `${progress ?? 0}%`, height: "100%", background: "#8fdb8f", borderRadius: 3 }} />
+        </div>
+        <span style={{ fontSize: 12, opacity: 0.7 }}>{progress === null ? t("Progress unavailable") : new Intl.NumberFormat(pluginLocales[locale], { style: "percent", maximumFractionDigits: 0 }).format(progress / 100)}</span>
+      </div>}
   </>;
-  const style = { display: "flex", gap: 12, padding: "8px", borderRadius: 10, opacity: a.unlocked ? 1 : 0.65 };
-  return <Focusable ref={rowRef} {...(hasRevealButton || ta ? {} : { tabIndex: 0, onActivate: () => {} })} noFocusRing
+  const style = { display: "flex", flexWrap: "wrap" as const, gap: 12, padding: "8px", borderRadius: 10, opacity: a.unlocked ? 1 : 0.65 };
+  return <Focusable ref={rowRef} {...(a.unlocked && !ta ? { tabIndex: 0, onActivate: () => {} } : {})} noFocusRing
     flow-children="row" className="nexus-achievement-row" focusWithinClassName="nexus-achievement-row-focused"
     aria-label={hidden ? t("Secret achievement") : name}
+    onOptionsActionDescription={!a.unlocked ? t(favorite ? "Remove from favorites" : "Add to favorites") : undefined}
+    onOptionsButton={event => {
+      if (a.unlocked) return;
+      event.preventDefault(); event.stopPropagation();
+      if (!event.detail.is_repeat) onFavorite();
+    }}
     onSecondaryActionDescription={hasRevealButton ? t(reveal ? "Hide secret achievement" : "Show secret achievement") : undefined}
     actionDescriptionMap={ta ? { [GamepadButton.BUMPER_RIGHT]: t("View on TrueAchievements") } : undefined}
     onSecondaryButton={event => {
@@ -643,6 +667,16 @@ function AchievementRow({ a, ta, reveal, onToggle, onFlag }: { a: Achievement; t
 }
 
 function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
+  const preferences = useAchievementPreferences(title.titleId);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
+  const toggleFavorite = (id: string) => {
+    setSelectionError(null);
+    void toggleAchievementFavorite(title.titleId, id).catch(error => setSelectionError(formatTrackingError(error)));
+  };
+  const toggleTracked = (id: string) => {
+    setSelectionError(null);
+    void toggleAchievementTracked(title.titleId, id).catch(error => setSelectionError(formatTrackingError(error)));
+  };
   const { locale, t } = usePluginTranslation();
   const [ta, setTA] = useState<TAMetadata | null>(null);
   const taRevision = useTASessionRevision();
@@ -743,9 +777,13 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
   }, [detail, filter, sort, sortDirection, query, reveal, overrides, contentFilter, ta, selectedTAFilter]);
   const membershipPending = contentFilter !== "all" && detail?.ok && !detail.mythic && !detail.mythicUnavailable;
 
-  const groups: { label: "Unlocked" | "Locked" | null; items: Achievement[] }[] = grouped
-    ? [{ label: "Unlocked", items: rows.filter(a => a.unlocked) }, { label: "Locked", items: rows.filter(a => !a.unlocked) }]
-    : [{ label: null, items: rows }];
+  const separated = splitFavoriteAchievements(rows, preferences.favorites);
+  const groups: { label: Message | null; items: Achievement[] }[] = [
+    ...(separated.favorites.length ? [{ label: "Favorites" as Message, items: separated.favorites }] : []),
+    ...(grouped ? [{ label: "Unlocked" as Message, items: separated.others.filter(a => a.unlocked) },
+      { label: "Locked" as Message, items: separated.others.filter(a => !a.unlocked) }]
+      : [{ label: separated.favorites.length ? "Other achievements" as Message : null, items: separated.others }]),
+  ];
 
   return (
     <div>
@@ -778,6 +816,8 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
           transition: none !important;
         }
         .nexus-ta-missable { color: #ff6b6b !important; }
+        .nexus-favorite-active { color: #ffd36b !important; }
+        .nexus-track-active { color: #8fdb8f !important; }
         :where(.nexus-achievement-row-focused, .nexus-achievement-row:focus-within,
           .nexus-achievement-row:has(.nexus-row-action:is(.gpfocus, :focus, :active))) .nexus-row-action {
           background: #e5e8eb !important;
@@ -786,12 +826,18 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
         :where(.nexus-achievement-row-focused, .nexus-achievement-row:focus-within) .nexus-ta-missable {
           color: #b42318 !important;
         }
+        :where(.nexus-achievement-row-focused, .nexus-achievement-row:focus-within) .nexus-favorite-active { color: #875f00 !important; }
+        :where(.nexus-achievement-row-focused, .nexus-achievement-row:focus-within) .nexus-track-active { color: #1f6829 !important; }
         .nexus-achievement-row .nexus-row-action:is(.gpfocus, :focus, :hover, :active) {
           background: #0e141b !important;
           color: #fff !important;
         }
         .nexus-row-action svg { fill: currentColor; color: inherit; }
-        .nexus-filter-group > .nexus-filter-row {
+        .nexus-filter-group > .nexus-filter-row,
+        .nexus-tracker-row .nexus-tracker-option > :first-child {
+          border-radius: 0 !important;
+          width: 100%;
+          box-sizing: border-box;
           margin-top: 0 !important;
           margin-bottom: 0 !important;
           border-top: 0 !important;
@@ -807,7 +853,7 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
       {ta?.status === "unavailable" && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("TA flags unavailable. You can still open TrueAchievements.")}</div>}
       {ta?.status === "stale" && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("Showing cached TA flags.")}</div>}
       <section className="nexus-filter-group" aria-label={t("Filters")}
-        style={{ margin: "12px 0", padding: 0, borderTop: "1px solid rgba(255,255,255,0.15)", borderBottom: "1px solid rgba(255,255,255,0.15)" }}>
+        style={{ display: "flex", flexDirection: "column", gap: 8, margin: "12px 0", padding: 0 }}>
         <Field className="nexus-filter-row" bottomSeparator="none" label={t("Filter")} childrenContainerWidth="min" verticalAlignment="center">
           <Dropdown rgOptions={FILTERS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={filter}
             onChange={option => updateView({ filter: option.data as Filter })} />
@@ -835,7 +881,10 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
         </Focusable>
       </Field></div>
       {viewError && <div role="alert">{t(viewError)}</div>}
-      <div className="nexus-control-row"><AchievementLanguageSelector onChange={() => setLanguageRevision(value => value + 1)} /></div>
+      <div className="nexus-language-row" style={{ marginBottom: 8 }}><AchievementLanguageSelector onChange={() => setLanguageRevision(value => value + 1)} /></div>
+      <div className="nexus-tracker-row" style={{ marginBottom: 8 }}><TrackerControls compact /></div>
+      {selectionError && <div role="alert">{selectionError}</div>}
+      {preferences.error && <div role="alert">{t("Could not load favorite and tracked achievements.")}</div>}
       <ToggleField label={t("Group achievements")} description={t("Separate unlocked and locked achievements.")}
         checked={grouped} onChange={async enabled => {
           setGroupError(false);
@@ -860,6 +909,8 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
           {group.label && <h3 style={{ margin: "12px 0 8px" }}>{t(group.label)} ({group.items.length})</h3>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {group.items.map(a => <AchievementRow key={a.id || a.name} a={a} ta={ta?.achievements[a.id]} reveal={isRevealed(a)}
+              favorite={preferences.favorites.includes(a.id)} tracked={preferences.tracked.includes(a.id)}
+              onFavorite={() => toggleFavorite(a.id)} onTrack={() => toggleTracked(a.id)}
               onFlag={flag => updateView({ taFilter: `ta:${flag}` })}
               onToggle={() => setOverrides(o => ({ ...o, [a.id]: !isRevealed(a) }))} />)}
           </div>
@@ -1111,6 +1162,7 @@ function Content() {
 
   return (
     <PanelSection title={t("Nexus Achievements")}>
+      <PanelSectionRow><HideTrackerButton /></PanelSectionRow>
       <PanelSectionRow>
         <RunningGame flushCover onSelect={titleId => { requestedHideAllTitles = false; requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
       </PanelSectionRow>
@@ -1120,6 +1172,7 @@ function Content() {
         </ButtonItem>
       </PanelSectionRow>
       <PanelSectionRow><TAAccount /></PanelSectionRow>
+      <PanelSectionRow><TrackerControls /></PanelSectionRow>
       <PanelSectionRow>
         <ToggleField label={t("Enable notifications")} checked={settings.enabled}
           onChange={enabled => update({ enabled })} />
@@ -1240,16 +1293,18 @@ function Content() {
 }
 
 export default definePlugin(() => {
+  const stopTracking = startAchievementTracking();
+  routerHook.addGlobalComponent("NexusAchievementTracker", () => <AchievementTrackerOverlay />);
   const removeGameMenuButtons = installGameMenuButtons(openGameAchievements, <GamerscoreIcon />);
   const removeProfileGamerscore = installProfileGamerscore(<GamerscoreIcon />, openAllGamesAchievements);
   // Current Steam builds reselect their built-in sound at popup dispatch.
   const store = (window as unknown as { NotificationStore?: { PlayNotificationSound: (toast: unknown) => unknown } }).NotificationStore;
   const soundPatch = store?.PlayNotificationSound ? replacePatch(store, "PlayNotificationSound", args =>
-    isNexusToast(args[0]) ? undefined : callOriginal) : undefined;
+    shouldSuppressNexusSound(args[0]) ? undefined : callOriginal) : undefined;
   void initializeSystemLanguage(() => window.SteamClient.Settings.GetCurrentLanguage());
   getSettings().then(s => { setGameMenuEnabled(s.game_menu_button ?? true); setProfileGamerscoreEnabled(s.profile_gamerscore ?? false); currentDuration = s.duration; notificationDurations = s.notification_durations || {}; notificationAudio.configure(s.notification_sounds, s.notification_sound_durations); setPluginLanguage(s.plugin_language || "system"); applyRememberGameView(s.remember_game_view_settings ?? true); }).catch(() => {});
   routerHook.addRoute(ROUTE, AchievementsPage, { exact: true });
-  const listener = addEventListener<[AchievementEvent]>("achievement", showAchievement);
+  const listener = addEventListener<[AchievementEvent]>("achievement", event => { void refreshTrackerState(true); void showAchievement(event); });
   const mythicListener = addEventListener<[MythicEvent]>("mythic", showMythic);
   let progressDisposed = false;
   const refreshMythicProgress = async () => {
@@ -1274,6 +1329,8 @@ export default definePlugin(() => {
     content: <Content />,
     icon: <FaTrophy />,
     onDismount() {
+      routerHook.removeGlobalComponent("NexusAchievementTracker");
+      stopTracking();
       progressDisposed = true;
       clearInterval(mythicProgressTimer);
       removeProfileGamerscore();

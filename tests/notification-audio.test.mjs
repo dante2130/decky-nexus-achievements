@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { NotificationAudio, observePopupSound, isNexusToast } from '../src/notification-audio.ts';
+import { shouldSuppressNexusSound, NotificationAudio, observePopupSound, isNexusToast } from '../src/notification-audio.ts';
 
 const payload = { data: 'YXVkaW8=', mime: 'audio/wav' };
 function player() { return { plays: 0, pauses: 0, onended: null, async play() { this.plays++; }, pause() { this.pauses++; } }; }
@@ -112,4 +112,13 @@ test('first popup uses persisted sound length without waiting for cold audio loa
   assert.equal(await audio.duration('normal'), 9000);
   assert.equal(measurements, 1);
   audio.dispose();
+});
+
+test('default-sound Nexus notifications are allowed through native playback', () => {
+  const toast = { decky: true, data: { className: 'nexus-achievement-notification', playSound: true } };
+  assert.equal(shouldSuppressNexusSound(toast), false);
+  assert.equal(shouldSuppressNexusSound({ notifications: [toast] }), false);
+  toast.data.playSound = false;
+  assert.equal(shouldSuppressNexusSound(toast), true);
+  assert.equal(shouldSuppressNexusSound({ notifications: [toast] }), true);
 });
