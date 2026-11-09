@@ -28,7 +28,7 @@ jobs:
       - name: Package plugin
         run: |
           mkdir -p package/decky-nexus-achievements
-          cp -R dist main.py achievement_language.py mythic.py steam_menu.py plugin.json package.json LICENSE README.md package/decky-nexus-achievements/
+          cp -R dist main.py achievement_language.py mythic.py steam_menu.py trueachievements.py ta_session.py ta_bridge.py ta_worker.py src/ta_flags.json plugin.json package.json LICENSE README.md package/decky-nexus-achievements/
           tar --owner=0 --group=0 -czf decky-nexus-achievements.tar.gz -C package decky-nexus-achievements
           sha256sum decky-nexus-achievements.tar.gz > decky-nexus-achievements.tar.gz.sha256
       - uses: actions/upload-artifact@v4
