@@ -111,5 +111,8 @@
   "Could not save profile Gamerscore preference.": "Could not save profile Gamerscore preference.",
   "Profile Gamerscore unavailable. Check your Nexus sign-in and update the achievement backend.": "Profile Gamerscore unavailable. Check your Nexus sign-in and update the achievement backend.",
   "Profile Gamerscore: {score}": "Profile Gamerscore: {score}",
-  "← Back to game": "← Back to game"
+  "← Back to game": "← Back to game",
+  "Rarity": "Rarity",
+  "Ascending": "Ascending",
+  "Descending": "Descending"
 }

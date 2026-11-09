@@ -202,3 +202,5 @@ The persistent status-bar fallback uses a regular click control and does not reg
 Mythic progress loads in the background at plugin startup for all saved games, then refreshes every ten minutes. The games list updates as results arrive without opening individual games. The initial scan does not announce historical completions. Xbox sign-in and a connection are required to fetch progress.
 
 The initial local game view includes preloaded Mythic progress, Original/Add-on membership, and selected-language text. The startup scan also warms localized notification text; changing achievement language requests a new background scan.
+
+Achievement sorting supports name, Gamerscore, unlock date, and Xbox unlock percentage (rarity). Use the up/down arrows beside Sort by for ascending/descending order. Ascending rarity puts the rarest achievements first; unavailable rarity stays last in both directions. Sort direction is saved per game when preference saving is enabled.
