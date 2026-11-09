@@ -5,6 +5,8 @@ import {
   ButtonItem,
   DialogButton,
   DropdownItem,
+  Dropdown,
+  Field,
   Focusable,
   Navigation,
   NavEntryPositionPreferences,
@@ -23,6 +25,7 @@ import { NotificationAudio, observePopupSound, isNexusToast, type PopupPlayback,
 import { installProfileGamerscore, setProfileGamerscoreEnabled, saveProfileGamerscore, useProfileGamerscore, refreshProfileGamerscore } from "./profile-gamerscore";
 import { installGameMenuButtons, invalidateGameMenuCache, setGameMenuEnabled, saveGameMenuButton, type MenuTarget } from "./game-menu";
 import { RareIcon, MythicIcon } from "./achievement-icons";
+import { compareAchievements, type AchievementSort, type SortDirection } from "./achievement-sorting";
 import { SessionCache } from "./cache";
 import { matchesAchievementSet, type AchievementSet } from "./achievement-filters";
 import { getPluginLanguage, getPluginLanguagePreference, initializeSystemLanguage, setPluginLanguage, subscribeLanguage, translate, translateError, pluginLanguages, pluginLocales, type Message } from "./i18n";
@@ -404,11 +407,11 @@ function MythicProgress({ detail, mythicOnly, onChange }: { detail: TitleDetail;
 }
 
 type Filter = "all" | "unlocked" | "locked";
-type Sort = "name" | "gamerscore" | "date";
-interface GameViewSettings { filter: Filter; sort: Sort; contentFilter: AchievementSet; }
-const DEFAULT_GAME_VIEW: GameViewSettings = { filter: "all", sort: "date", contentFilter: "all" };
+type Sort = AchievementSort;
+interface GameViewSettings { filter: Filter; sort: Sort; sortDirection: SortDirection; contentFilter: AchievementSet; }
+const DEFAULT_GAME_VIEW: GameViewSettings = { filter: "all", sort: "date", sortDirection: "desc", contentFilter: "all" };
 const getGameViewSettings = callable<[string], GameViewSettings>("get_game_view_settings");
-const setGameViewSettings = callable<[string, Filter, Sort, AchievementSet], GameViewSettings>("set_game_view_settings");
+const setGameViewSettings = callable<[string, Filter, Sort, AchievementSet, SortDirection], GameViewSettings>("set_game_view_settings");
 const gameViewCache = new Map<string, GameViewSettings>();
 let rememberGameView = true;
 let gameViewPreferenceGeneration = 0;
@@ -422,7 +425,7 @@ let gameViewSaveQueue = Promise.resolve();
 function saveGameView(titleId: string, value: GameViewSettings): Promise<GameViewSettings> {
   const generation = gameViewPreferenceGeneration;
   const result = gameViewSaveQueue.then(() => rememberGameView && generation === gameViewPreferenceGeneration
-    ? setGameViewSettings(titleId, value.filter, value.sort, value.contentFilter) : value);
+    ? setGameViewSettings(titleId, value.filter, value.sort, value.contentFilter, value.sortDirection) : value);
   gameViewSaveQueue = result.then(() => undefined, () => undefined);
   return result;
 }
@@ -436,6 +439,7 @@ const SORTS = [
   { data: "name", label: "Name" },
   { data: "gamerscore", label: "Gamerscore" },
   { data: "date", label: "Unlock date" },
+  { data: "rarity", label: "Rarity" },
 ];
 const ACHIEVEMENT_SETS = [
   { data: "all", label: "All" },
@@ -544,7 +548,7 @@ function TitleView({ title, onBack, tick, hideAllTitles = false }: { title: Titl
   const isRevealed = (a: Achievement) => overrides[a.id] ?? reveal;
   const [detail, setDetail] = useState<TitleDetail | null>(() => achievementCache.peek(achievementCacheKey(title)) ?? null);
   const [view, setView] = useState<GameViewSettings>(() => (rememberGameView ? gameViewCache.get(title.titleId) : undefined) ?? DEFAULT_GAME_VIEW);
-  const { filter, sort, contentFilter } = view;
+  const { filter, sort, sortDirection, contentFilter } = view;
   const [viewError, setViewError] = useState<Message | null>(null);
   const viewRevision = useRef(0);
   const viewMounted = useRef(false);
@@ -614,12 +618,8 @@ function TitleView({ title, onBack, tick, hideAllTitles = false }: { title: Titl
       const hidden = a.secret && !a.unlocked && !isRevealed(a);
       return !hidden && (a.name.toLowerCase().includes(q) || a.description.toLowerCase().includes(q));
     });
-    return list.sort((x, y) => {
-      if (sort === "gamerscore") return y.gamerscore - x.gamerscore || x.name.localeCompare(y.name);
-      if (sort === "date") return (y.unlockedAt ?? 0) - (x.unlockedAt ?? 0) || x.name.localeCompare(y.name);
-      return x.name.localeCompare(y.name);
-    });
-  }, [detail, filter, sort, query, reveal, overrides, contentFilter]);
+    return list.sort((x, y) => compareAchievements(x, y, sort, sortDirection));
+  }, [detail, filter, sort, sortDirection, query, reveal, overrides, contentFilter]);
   const membershipPending = contentFilter !== "all" && detail?.ok && !detail.mythic && !detail.mythicUnavailable;
 
   const groups: { label: "Unlocked" | "Locked" | null; items: Achievement[] }[] = grouped
@@ -672,8 +672,20 @@ function TitleView({ title, onBack, tick, hideAllTitles = false }: { title: Titl
         onChange={o => updateView({ filter: o.data as Filter })} />
       <DropdownItem label={t("Achievement set")} rgOptions={ACHIEVEMENT_SETS.map(option => ({ ...option, label: t(option.label as Message) }))}
         selectedOption={contentFilter} onChange={option => updateView({ contentFilter: option.data as AchievementSet })} />
-      <DropdownItem label={t("Sort by")} rgOptions={SORTS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={sort}
-        onChange={o => updateView({ sort: o.data as Sort })} />
+      <Field label={t("Sort by")} childrenContainerWidth="min" verticalAlignment="center">
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+
+        {(["asc", "desc"] as const).map(direction => <DialogButton key={direction}
+          aria-label={t(direction === "asc" ? "Ascending" : "Descending")}
+          aria-pressed={sortDirection === direction}
+          style={{ width: 44, minWidth: 44, padding: 0, height: 40,
+            background: sortDirection === direction ? "#fff" : undefined,
+            color: sortDirection === direction ? "#0e141b" : undefined }}
+          onClick={() => updateView({ sortDirection: direction })}>{direction === "asc" ? "↑" : "↓"}</DialogButton>)}
+          <Dropdown rgOptions={SORTS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={sort}
+            onChange={o => updateView({ sort: o.data as Sort })} />
+        </div>
+      </Field>
       {viewError && <div role="alert">{t(viewError)}</div>}
       <AchievementLanguageSelector onChange={() => setLanguageRevision(value => value + 1)} />
       <ToggleField label={t("Group achievements")} description={t("Separate unlocked and locked achievements.")}

@@ -111,5 +111,8 @@
   "Could not save profile Gamerscore preference.": "Не удалось сохранить настройку Gamerscore профиля.",
   "Profile Gamerscore unavailable. Check your Nexus sign-in and update the achievement backend.": "Gamerscore профиля недоступен. Проверьте вход в Nexus и обновите серверную часть достижений.",
   "Profile Gamerscore: {score}": "Gamerscore профиля: {score}",
-  "← Back to game": "← Назад к игре"
+  "← Back to game": "← Назад к игре",
+  "Rarity": "Редкость",
+  "Ascending": "По возрастанию",
+  "Descending": "По убыванию"
 }
