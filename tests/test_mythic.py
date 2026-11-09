@@ -22,6 +22,14 @@ def response(earned=False):
 
 
 class MythicTests(unittest.TestCase):
+    def test_notification_artwork_uses_latest_unlocked_original(self):
+        row = {"baseGame": True, "unlocked": True, "iconUrl": "https://example.com/first", "unlockedAt": 10}
+        rows = [row, {**row, "iconUrl": "https://example.com/last", "unlockedAt": 20},
+                {**row, "baseGame": False, "iconUrl": "https://example.com/addon", "unlockedAt": 30},
+                {**row, "unlocked": False, "iconUrl": "https://example.com/locked", "unlockedAt": 40}]
+        self.assertEqual(main.mythic_notification_icon({"achievements": rows}), "https://example.com/last")
+        self.assertEqual(main.mythic_notification_icon({"achievements": []}), "")
+
     def test_saved_title_read_never_waits_for_xbox_metadata(self):
         plugin = main.Plugin()
         saved = {"ok": True, "achievements": [{"id": "1", "name": "Saved"}]}
@@ -111,4 +119,41 @@ class MythicTests(unittest.TestCase):
                 detail["mythic"] = earned
                 await plugin.get_title_achievements("42")
                 self.assertEqual(emit.await_count, 1)
+        asyncio.run(check())
+
+    def test_startup_scan_loads_unopened_games_without_historical_notifications(self):
+        async def check():
+            plugin = main.Plugin()
+            plugin.settings = dict(main.DEFAULT_SETTINGS)
+            earned, _ = parse_mythic(response(True), "42")
+            detail = {"ok": True, "titleId": "42", "achievements": [],
+                      "_mythic_account": "fixture-account", "mythic": earned}
+            emit = AsyncMock()
+            with patch.object(main, "list_titles", return_value={"titles": [{"titleId": "42"}]}), \
+                 patch.object(main, "get_title", return_value={"ok": True}), \
+                 patch.object(main, "translate_title", AsyncMock(return_value=detail)), \
+                 patch.object(main, "decky", SimpleNamespace(emit=emit)):
+                await plugin._refresh_mythic_library()
+                self.assertEqual((await plugin.get_mythic_progress())["42"], earned)
+                emit.assert_not_called()
+        asyncio.run(check())
+
+    def test_first_saved_view_includes_preloaded_mythic_and_membership(self):
+        async def check():
+            plugin = main.Plugin()
+            plugin.settings = dict(main.DEFAULT_SETTINGS)
+            group, _ = parse_mythic(response(True), "42")
+            snapshot = {"ok": True, "titleId": "42", "achievements": [
+                {"id": "scid:1", "name": "Saved", "unlocked": False}]}
+            fetched = {**snapshot, "mythic": group, "_mythic_account": "fixture-account",
+                       "achievements": [{**snapshot["achievements"][0], "baseGame": True}]}
+            with patch.object(main, "get_title", return_value=snapshot), \
+                 patch.object(main, "translate_title", AsyncMock(return_value=fetched)) as fetch:
+                await plugin.get_title_achievements("42")  # Background preload.
+                snapshot["achievements"][0]["unlocked"] = True
+                first = await plugin.get_saved_title_achievements("42")
+                self.assertEqual(first["mythic"], group)
+                self.assertTrue(first["achievements"][0]["baseGame"])
+                self.assertTrue(first["achievements"][0]["unlocked"])
+                self.assertEqual(fetch.await_count, 1)
         asyncio.run(check())

@@ -27,7 +27,7 @@ Malformed lines and other `type` values are ignored. The plugin starts at the en
 
 1. Install [Decky Loader](https://decky.xyz) on the Deck.
 2. Build: `npm install && npm run build`.
-3. Copy this folder (with `dist/`, `main.py`, `achievement_language.py`, `mythic.py`, `plugin.json`, `package.json`, `LICENSE`) to `~/homebrew/plugins/decky-nexus-achievements/` (needs root to write). When extracting an archive, use `sudo tar --no-same-owner` and then `sudo chown -R root:root ~/homebrew/plugins/decky-nexus-achievements` to avoid importing a macOS UID. Keep backups outside `~/homebrew/plugins/`. Restart Decky: `sudo systemctl restart plugin_loader`.
+3. Copy this folder (with `dist/`, `main.py`, `achievement_language.py`, `mythic.py`, `steam_menu.py`, `plugin.json`, `package.json`, `LICENSE`) to `~/homebrew/plugins/decky-nexus-achievements/` (needs root to write). When extracting an archive, use `sudo tar --no-same-owner` and then `sudo chown -R root:root ~/homebrew/plugins/decky-nexus-achievements` to avoid importing a macOS UID. Keep backups outside `~/homebrew/plugins/`. Restart Decky: `sudo systemctl restart plugin_loader`.
 4. Open the Quick Access menu (`...`), then Nexus Achievements, then "Send test notification".
 
 ## Achievements viewer
@@ -167,3 +167,31 @@ Interface localization tests: `npm run test:i18n`.
 - Remote icons need network access; otherwise a trophy icon is shown.
 
 Achievement rows show Xbox-reported unlock percentages and a diamond badge for Rare achievements when metadata is available. Missing rarity is left blank.
+
+Use the main panel’s test notification type selector to preview normal, Rare, or Mythic notifications. Previews use sample data and do not change game progress or cached Mythic badges.
+
+To use custom notification audio, place a WAV, MP3, OGG, or FLAC file (up to 5 MB) in your Deck home folder. Select a notification type on the main panel, then choose its custom sound. Preview playback or send a test notification to check the selected file. Each notification type has its own saved file; remove the custom sound to make that notification type silent. Files remain at their selected paths and must stay accessible. Codec playback depends on Steam’s browser audio support.
+
+Steam’s built-in notification sound is disabled. Only selected custom audio files play; notification types without a file are silent.
+
+Normal, Rare, and Mythic notifications have separate display durations. Existing installations use the original duration until a per-type duration is chosen. Notification audio starts once when the popup becomes visible, not when queued or viewed in notification history; pending audio is cancelled if the popup disappears before loading finishes.
+
+When a custom sound is selected, its length (rounded up to a whole second) becomes the minimum display timeout for that notification type. The slider minimum and saved timeout follow this limit, and the slider range expands for longer sounds. Removing the file restores the two-second minimum without shortening your saved timeout.
+
+
+
+Enable “Show profile Gamerscore in status bar” to display the signed-in Xbox player profile’s reported total beside the SteamOS status indicators. The setting defaults to off. Profile reads are cached for five minutes and refreshed after achievement events; disabling the setting stops polling and hides the score. Missing profile data is not shown as zero. This feature requires an achievement backend exposing the optional numeric `gamerscore` field in `profile --json` (backend PR: https://github.com/dante2130/nexus-backend/pull/1).
+
+
+
+The profile Gamerscore is a clickable status-bar control on the home screen and game pages, not limited to running games. Select it to open the plugin’s all-games list. The same control is reused in Steam header variants without duplicating it.
+
+Game-header integration appends only Nexus entries without replacing Steam’s child array or shifting existing entries. The score badge is anchored separately to the cover, preserving other plugins’ header anchors, including PlayCount and ProtonDB Badges.
+
+Enable “Show Nexus Achievements in game menus” to show the running-game Steam menu entry and a compact clickable badge on the library game view. The badge opens that specific game in Nexus Achievements; no extra game-view panel or tab is added. The profile status-bar score opens the all-games list.
+
+Notification text wraps onto multiple lines. Nexus resizes the managed popup placeholder to fit the content and restores it after the notification closes. Gamerscore stays together before the description. Corner badges have no extra circular background, and Rare uses the original simple blue diamond.
+
+The persistent status-bar fallback uses a regular click control and does not register a controller-navigation node across Steam windows. Native controller focus is added only within the Gamepad header; Frame and VR headers are left untouched.
+
+Mythic progress loads in the background at plugin startup for all saved games, then refreshes every ten minutes. The games list updates as results arrive without opening individual games. The initial scan does not announce historical completions. Xbox sign-in and a connection are required to fetch progress.

@@ -4,6 +4,7 @@ Tails a JSONL file written by the Nexus guest bridge and forwards each
 achievement event to the frontend, which shows a toast.
 """
 import asyncio
+import base64
 import json
 import os
 import re
@@ -12,8 +13,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 # Decky loads main.py by filename without adding the plugin directory to sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from achievement_language import LANGUAGES, translate_title
+from achievement_language import LANGUAGES, translate_title, backend_command, run_bounded
 from mythic import MythicTracker
+from steam_menu import shortcut_game
 
 try:
     import decky
@@ -23,7 +25,29 @@ except ImportError:  # unit tests run outside Decky Loader
 DEFAULT_RELATIVE = ".local/share/nexus-launcher/achievement-events.jsonl"
 POLL_SECONDS = 0.5
 MAX_LINE = 64 * 1024
-DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": "", "plugin_language": "system", "group_achievements": False, "game_view_settings": {}, "remember_game_view_settings": True}
+DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": "", "plugin_language": "system", "group_achievements": False, "game_view_settings": {}, "remember_game_view_settings": True, "test_notification_type": "normal", "notification_sounds": {}, "notification_durations": {}, "notification_sound_durations": {}, "installed_games_only": False, "game_menu_button": True, "profile_gamerscore": False}
+
+
+AUDIO_MIMES = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".flac": "audio/flac"}
+MAX_AUDIO_BYTES = 5 * 1024 * 1024
+
+
+def read_notification_audio(path: str) -> tuple[Path, bytes, str]:
+    if not isinstance(path, str) or len(path) > 4096:
+        raise ValueError("Invalid audio path.")
+    file = Path(path).expanduser().resolve()
+    try:
+        file.relative_to(user_home().resolve())
+    except ValueError:
+        raise ValueError("Choose an audio file in your home folder.")
+    mime = AUDIO_MIMES.get(file.suffix.lower())
+    if not mime or not file.is_file() or not 0 < file.stat().st_size <= MAX_AUDIO_BYTES:
+        raise ValueError("Choose a WAV, MP3, OGG, or FLAC file up to 5 MB.")
+    with file.open("rb") as stream:
+        data = stream.read(MAX_AUDIO_BYTES + 1)
+    if not data or len(data) > MAX_AUDIO_BYTES:
+        raise ValueError("Audio file is empty or too large.")
+    return file, data, mime
 
 
 def user_home() -> Path:
@@ -85,16 +109,83 @@ def valid_title_id(title_id: Any) -> bool:
     return isinstance(title_id, str) and bool(TITLE_ID_RE.match(title_id)) and ".." not in title_id
 
 
+def mythic_notification_icon(detail: dict) -> str:
+    originals = [item for item in detail.get("achievements", [])
+                 if item.get("baseGame") is True and item.get("unlocked") is True
+                 and isinstance(item.get("iconUrl"), str) and item["iconUrl"]]
+    latest = max(originals, key=lambda item: _num(item.get("unlockedAt")), default=None)
+    return latest["iconUrl"] if latest else ""
+
+
+def parse_profile_gamerscore(raw: bytes) -> int:
+    data = json.loads(raw)
+    if (not isinstance(data, dict) or data.get("schema") != 1
+            or not isinstance(data.get("account"), str) or not data["account"]
+            or len(data["account"]) > 256
+            or type(data.get("gamerscore")) is not int or not 0 <= data["gamerscore"] <= 0xffffffff):
+        raise ValueError("Profile Gamerscore unavailable.")
+    return data["gamerscore"]
+
+
+def launcher_games() -> list[dict]:
+    state = _read_json(user_home() / ".config/xodus-nexus/launcher-state.json")
+    games = state.get("games") if state else None
+    return [game for game in games[:MAX_TITLES] if isinstance(game, dict)] if isinstance(games, list) else []
+
+
+def installed_game_title_id(game: dict) -> str:
+    if game.get("installState") != "ready" or not isinstance(game.get("path"), str):
+        return ""
+    try:
+        directory = Path(game["path"])
+        config = next((entry for entry in directory.iterdir() if entry.name.lower() == "microsoftgame.config"), None)
+        if config is None or not config.is_file() or config.stat().st_size > 1_000_000:
+            return ""
+        raw = config.read_bytes()
+        if len(raw) > 1_000_000 or b"<!DOCTYPE" in raw.upper():
+            return ""
+        # Decky's embedded Python omits xml.etree. Only read this bounded,
+        # literal hexadecimal field; do not interpret entities or declarations.
+        xml = raw.decode("utf-16" if raw.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
+        if "<!DOCTYPE" in xml.upper() or "<!ENTITY" in xml.upper():
+            return ""
+        xml = re.sub(r"<!--.*?-->", "", xml, flags=re.DOTALL)
+        titles = re.findall(r"<((?:[A-Za-z_][\w.-]*:)?TitleId)\s*>\s*([a-fA-F0-9]{1,8})\s*</\1\s*>", xml)
+        if len(titles) == 1 and int(titles[0][1], 16) > 0:
+            return str(int(titles[0][1], 16))
+    except (OSError, ValueError, UnicodeError):
+        pass
+    return ""
+
+
+def installed_title_ids() -> set[str]:
+    return {title for game in launcher_games() if (title := installed_game_title_id(game))}
+
+
+def game_menu_target(app_id: int) -> Optional[Dict[str, Any]]:
+    if type(app_id) is not int or not 0 < app_id <= 0xffffffff:
+        return None
+    game = shortcut_game(user_home(), app_id, launcher_games())
+    title_id = installed_game_title_id(game) if game else ""
+    if not title_id:
+        return None
+    summary = next((title for title in list_titles()["titles"] if title["titleId"] == title_id), None)
+    return summary or {"titleId": title_id, "titleName": _str(game.get("title")) or title_id,
+                       "coverUrl": _str(game.get("coverUrl"))}
+
+
 def list_titles() -> Dict[str, Any]:
     data = _read_json(resolve_achievements_dir() / "index.json")
     if data is None or not isinstance(data.get("titles"), list):
         return {"ok": True, "titles": []}
     titles = []
+    installed = installed_title_ids()
     for t in data["titles"][:MAX_TITLES]:
         if not isinstance(t, dict) or not valid_title_id(t.get("titleId")):
             continue
         titles.append({
             "titleId": t["titleId"],
+            "installed": t["titleId"] in installed,
             "titleName": _str(t.get("titleName")) or t["titleId"],
             "coverUrl": _str(t.get("coverUrl")),
             "unlocked": _num(t.get("unlocked")),
@@ -240,10 +331,11 @@ class Plugin:
         path.write_text(json.dumps(self.settings))
 
     async def get_settings(self) -> Dict[str, Any]:
-        return {**self.settings, "resolved_path": str(resolve_events_path(self.settings["events_path"]))}
+        return {**self.settings, "resolved_path": str(resolve_events_path(self.settings["events_path"])), "sound_picker_path": str(user_home())}
 
     async def set_settings(self, enabled: bool, duration: int, events_path: str = "") -> Dict[str, Any]:
-        duration = max(1000, min(60000, int(duration)))
+        duration = max(1000, min(86400000, int(duration)))
+        duration = max(duration, self.settings.get("notification_sound_durations", {}).get("normal", 0))
         changed = events_path != self.settings["events_path"]
         self.settings = {**self.settings, "enabled": bool(enabled), "duration": duration, "events_path": str(events_path)}
         self._save()
@@ -308,7 +400,7 @@ class Plugin:
 
     async def list_titles(self) -> Dict[str, Any]:
         try:
-            return list_titles()
+            return await asyncio.to_thread(list_titles)
         except Exception as error:
             return {"ok": False, "error": str(error), "titles": []}
 
@@ -320,6 +412,8 @@ class Plugin:
             raise ValueError("Unsupported achievement language.")
         self.settings["achievement_language"] = language
         self._save()
+        if hasattr(self, "_library_refresh_requested"):
+            self._library_refresh_requested.set()
         return language
 
     async def set_plugin_language(self, language: str) -> str:
@@ -344,24 +438,91 @@ class Plugin:
             raise
         return self.settings["group_achievements"]
 
+    def _localized_snapshot(self, detail: dict, language: str) -> dict:
+        text = getattr(self, "_localized_titles", {}).get((language, detail.get("titleId")))
+        if not text:
+            return detail
+        return {**detail, "achievements": [
+            {**item, **text.get(item["id"], {})} for item in detail.get("achievements", [])]}
+
+    def _preloaded_snapshot(self, detail: dict) -> dict:
+        title_id = detail.get("titleId")
+        group = getattr(self, "_mythic_progress", {}).get(title_id)
+        metadata = getattr(self, "_achievement_metadata", {}).get(title_id, {})
+        return {**detail, **({"mythic": group} if group else {}), "achievements": [
+            {**item, **metadata.get(item["id"], {})} for item in detail.get("achievements", [])]}
+
     async def get_saved_title_achievements(self, title_id: str) -> Dict[str, Any]:
-        return get_title(title_id)
+        language = self.settings.get("achievement_language", "")
+        detail = get_title(title_id)
+        if language and (language, title_id) not in getattr(self, "_localized_titles", {}):
+            # Do not briefly render original text while the first translation loads.
+            return await self.get_title_achievements(title_id)
+        return self._preloaded_snapshot(self._localized_snapshot(detail, language) if language else detail)
 
     async def get_title_achievements(self, title_id: str) -> Dict[str, Any]:
         detail = get_title(title_id)
+        language = self.settings.get("achievement_language", "")
         try:
-            result = await translate_title(user_home(), detail, self.settings.get("achievement_language", ""))
+            result = await translate_title(user_home(), detail, language)
+            if language and result.get("ok") and not result.get("languageError"):
+                if not hasattr(self, "_localized_titles"):
+                    self._localized_titles = {}
+                if len(self._localized_titles) >= MAX_TITLES:
+                    self._localized_titles.pop(next(iter(self._localized_titles)))
+                self._localized_titles[(language, title_id)] = {
+                    item["id"]: {"name": item["name"], "description": item["description"]}
+                    for item in result.get("achievements", [])}
+            if result.get("ok"):
+                if not hasattr(self, "_achievement_metadata"):
+                    self._achievement_metadata = {}
+                if len(self._achievement_metadata) >= MAX_TITLES:
+                    self._achievement_metadata.pop(next(iter(self._achievement_metadata)))
+                self._achievement_metadata[title_id] = {
+                    item["id"]: {key: item[key] for key in ("baseGame", "rarity") if key in item}
+                    for item in result.get("achievements", [])}
             account = result.pop("_mythic_account", "")
             if result.get("mythic"):
+                if not hasattr(self, "_mythic_progress"):
+                    self._mythic_progress = {}
+                self._mythic_progress[title_id] = result["mythic"]
                 if not hasattr(self, "_mythic_tracker"):
                     self._mythic_tracker = MythicTracker()
                 newly_earned = self._mythic_tracker.observe(account, title_id, result["mythic"])
                 if newly_earned and self.settings["enabled"]:
                     await decky.emit("mythic", {"titleId": title_id, "titleName": result.get("titleName", title_id),
-                                                "mythic": result["mythic"]})
+                                                "mythic": result["mythic"], "iconUrl": mythic_notification_icon(result)})
             return result
         except Exception as error:
-            return {**detail, "languageError": str(error) or "Could not load the selected language."}
+            return {**self._localized_snapshot(detail, language), "languageError": str(error) or "Could not load the selected language."}
+
+    async def get_mythic_progress(self) -> Dict[str, Any]:
+        return dict(getattr(self, "_mythic_progress", {}))
+
+    async def _refresh_mythic_library(self):
+        # Sequential requests keep startup responsive and avoid flooding Xbox.
+        titles = await asyncio.to_thread(list_titles)
+        language = self.settings.get("achievement_language", "")
+        for title in titles["titles"]:
+            if language != self.settings.get("achievement_language", ""):
+                return
+            await self.get_title_achievements(title["titleId"])
+            await asyncio.sleep(0.25)
+
+    async def _watch_mythic_library(self):
+        self._library_refresh_requested = asyncio.Event()
+        while True:
+            self._library_refresh_requested.clear()
+            try:
+                await self._refresh_mythic_library()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                decky.logger.error(f"Mythic library refresh error: {error}")
+            try:
+                await asyncio.wait_for(self._library_refresh_requested.wait(), timeout=600)
+            except asyncio.TimeoutError:
+                pass
 
     def _schedule_mythic_refresh(self, title_id: str):
         if not valid_title_id(title_id):
@@ -379,7 +540,150 @@ class Plugin:
                 self._mythic_jobs.pop(title_id, None)
         self._mythic_jobs[title_id] = asyncio.create_task(refresh())
 
-    async def test_notification(self, locale: str = "") -> None:
+    async def set_profile_gamerscore(self, enabled: bool) -> bool:
+        previous = self.settings
+        self.settings = {**previous, "profile_gamerscore": bool(enabled)}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        if not enabled:
+            self._profile_score_cache = None
+        return self.settings["profile_gamerscore"]
+
+    async def get_profile_gamerscore(self, force: bool = False) -> Dict[str, Any]:
+        if not self.settings.get("profile_gamerscore", False):
+            return {"ok": False, "error": "disabled"}
+        if not hasattr(self, "_profile_score_lock"):
+            self._profile_score_lock = asyncio.Lock()
+        async with self._profile_score_lock:
+            if not self.settings.get("profile_gamerscore", False):
+                return {"ok": False, "error": "disabled"}
+            now = asyncio.get_running_loop().time()
+            cache = getattr(self, "_profile_score_cache", None)
+            if cache and now - cache[0] < (10 if force is True else 300):
+                return {"ok": True, "gamerscore": cache[1]}
+            try:
+                command, env = backend_command(user_home())
+                code, raw = await run_bounded([*command, "profile", "--json"], env)
+                if code:
+                    raise ValueError("Profile unavailable.")
+                score = parse_profile_gamerscore(raw)
+                if not self.settings.get("profile_gamerscore", False):
+                    return {"ok": False, "error": "disabled"}
+                self._profile_score_cache = (asyncio.get_running_loop().time(), score)
+                return {"ok": True, "gamerscore": score}
+            except (OSError, ValueError, asyncio.TimeoutError):
+                self._profile_score_cache = None
+                return {"ok": False, "error": "profile-unavailable"}
+
+    async def get_game_menu_target(self, app_id: int) -> Optional[Dict[str, Any]]:
+        return await asyncio.to_thread(game_menu_target, app_id)
+
+    async def set_game_menu_button(self, enabled: bool) -> bool:
+        previous = self.settings
+        self.settings = {**previous, "game_menu_button": bool(enabled)}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return self.settings["game_menu_button"]
+
+    async def set_installed_games_only(self, enabled: bool) -> bool:
+        previous = self.settings
+        self.settings = {**previous, "installed_games_only": bool(enabled)}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return self.settings["installed_games_only"]
+
+    async def set_notification_duration(self, kind: str, duration: int) -> Dict[str, int]:
+        if kind not in ("rare", "mythic") or type(duration) is not int or not 2000 <= duration <= 86400000:
+            raise ValueError("Invalid notification duration.")
+        previous = self.settings
+        duration = max(duration, previous.get("notification_sound_durations", {}).get(kind, 0))
+        durations = {**previous.get("notification_durations", {}), kind: duration}
+        self.settings = {**previous, "notification_durations": durations}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return durations
+
+    async def set_notification_sound_duration(self, kind: str, path: str, duration: int) -> Dict[str, Any]:
+        if (kind not in ("normal", "rare", "mythic") or type(duration) is not int
+                or not 1000 <= duration <= 86400000
+                or self.settings.get("notification_sounds", {}).get(kind) != path):
+            raise ValueError("Invalid sound duration.")
+        previous = self.settings
+        minimum = ((duration + 999) // 1000) * 1000
+        lengths = {**previous.get("notification_sound_durations", {}), kind: minimum}
+        durations = dict(previous.get("notification_durations", {}))
+        normal = previous["duration"]
+        if kind == "normal":
+            normal = max(normal, minimum)
+        else:
+            durations[kind] = max(durations.get(kind, normal), minimum)
+        self.settings = {**previous, "notification_sound_durations": lengths,
+                         "notification_durations": durations, "duration": normal}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return await self.get_settings()
+
+    async def set_notification_sound(self, kind: str, path: str = "") -> Dict[str, str]:
+        if kind not in ("normal", "rare", "mythic"):
+            raise ValueError("Unsupported notification type.")
+        if path:
+            file, _, _ = await asyncio.to_thread(read_notification_audio, path)
+            path = str(file)
+        previous = self.settings
+        sounds = dict(previous.get("notification_sounds", {}))
+        if path:
+            sounds[kind] = path
+        else:
+            sounds.pop(kind, None)
+        lengths = dict(previous.get("notification_sound_durations", {}))
+        lengths.pop(kind, None)
+        self.settings = {**previous, "notification_sounds": sounds, "notification_sound_durations": lengths}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return sounds
+
+    async def get_notification_audio(self, kind: str) -> Dict[str, str]:
+        if kind not in ("normal", "rare", "mythic"):
+            raise ValueError("Unsupported notification type.")
+        path = self.settings.get("notification_sounds", {}).get(kind)
+        if not path:
+            return {}
+        _, data, mime = await asyncio.to_thread(read_notification_audio, path)
+        return {"data": base64.b64encode(data).decode("ascii"), "mime": mime}
+
+    async def set_test_notification_type(self, kind: str) -> str:
+        if kind not in ("normal", "rare", "mythic"):
+            raise ValueError("Unsupported notification type.")
+        previous = self.settings
+        self.settings = {**previous, "test_notification_type": kind}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return kind
+
+    async def test_notification(self, locale: str = "", kind: str = "normal") -> None:
+        if kind not in ("normal", "rare", "mythic"):
+            raise ValueError("Unsupported notification type.")
         texts = {
             "ru": ("Тестовое достижение", "Уведомления Nexus работают."),
             "uk": ("Тестове досягнення", "Сповіщення Nexus працюють."),
@@ -387,11 +691,35 @@ class Plugin:
         }
         language = self.settings.get("plugin_language", "system")
         name, description = texts.get(locale if language == "system" else language, texts["en"])
+        if kind == "mythic":
+            await decky.emit("mythic", {
+                "preview": True, "titleId": "test", "titleName": "Nexus",
+                "mythic": {"groupId": "test", "unlocked": True, "totalCount": 50,
+                           "unlockedCount": 50, "completedAt": None},
+            })
+            return
         await decky.emit("achievement", {
+            "preview": True,
+            **({"rarity": {"percentage": 1.23, "category": "Rare"}} if kind == "rare" else {}),
             "type": "achievement", "ts": "", "titleId": "test", "scid": "", "id": "0",
             "name": name, "description": description,
             "gamerscore": 10, "iconUrl": "",
         })
+
+    async def _localized_notification(self, event: dict) -> dict:
+        language = self.settings.get("achievement_language", "")
+        title_id = event.get("titleId", "")
+        if not language or not valid_title_id(title_id):
+            return event
+        keys = [event.get("id"), f"{event.get('scid', '')}:{event.get('id', '')}"]
+        text = getattr(self, "_localized_titles", {}).get((language, title_id), {})
+        if not any(key in text for key in keys):
+            await self.get_title_achievements(title_id)
+            text = getattr(self, "_localized_titles", {}).get((language, title_id), {})
+        for key in keys:
+            if key in text:
+                return {**event, **text[key]}
+        return event
 
     async def _watch(self):
         tailer = Tailer(resolve_events_path(self.settings["events_path"]))
@@ -399,7 +727,7 @@ class Plugin:
             try:
                 for event in tailer.poll():
                     if self.settings["enabled"]:
-                        await decky.emit("achievement", event)
+                        await decky.emit("achievement", await self._localized_notification(event))
                         self._schedule_mythic_refresh(event.get("titleId", ""))
             except asyncio.CancelledError:
                 raise
@@ -419,11 +747,14 @@ class Plugin:
     async def _main(self):
         self._load()
         await self._restart()
+        self._mythic_library_task = asyncio.create_task(self._watch_mythic_library())
 
     async def _unload(self):
         if self.task:
             self.task.cancel()
         jobs = list(getattr(self, "_mythic_jobs", {}).values())
+        if getattr(self, "_mythic_library_task", None):
+            jobs.append(self._mythic_library_task)
         for job in jobs:
             job.cancel()
         if jobs:

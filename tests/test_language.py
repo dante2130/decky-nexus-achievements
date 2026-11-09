@@ -116,3 +116,44 @@ class LanguageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class PreloadedLanguageTests(unittest.TestCase):
+    def test_first_load_and_notification_use_selected_language_without_opening_game(self):
+        async def check():
+            plugin = main.Plugin()
+            plugin.settings = {**main.DEFAULT_SETTINGS, "achievement_language": "ru-RU"}
+            saved = {"ok": True, "titleId": "42", "achievements": [
+                {"id": "scid:1", "name": "Original", "description": "Original text", "unlocked": False}]}
+            localized = {**saved, "achievements": [
+                {**saved["achievements"][0], "name": "Название", "description": "Описание"}]}
+            with patch.object(main, "get_title", return_value=saved), \
+                 patch.object(main, "translate_title", AsyncMock(return_value=localized)) as fetch:
+                # No background scan or game click has happened yet.
+                first = await plugin.get_saved_title_achievements("42")
+                self.assertEqual(first["achievements"][0]["name"], "Название")
+                event = {"titleId": "42", "scid": "scid", "id": "1", "name": "Original", "description": "Original text", "gamerscore": 10}
+                notification = await plugin._localized_notification(event)
+                self.assertEqual(notification["description"], "Описание")
+                self.assertEqual(notification["gamerscore"], 10)
+                self.assertEqual(event["name"], "Original")
+                self.assertEqual(fetch.await_count, 1)
+                # Overlay text onto fresh progress, never cache unlock state.
+                saved["achievements"][0]["unlocked"] = True
+                second = await plugin.get_saved_title_achievements("42")
+                self.assertTrue(second["achievements"][0]["unlocked"])
+                plugin.settings["achievement_language"] = ""
+                self.assertEqual((await plugin._localized_notification(event))["name"], "Original")
+        asyncio.run(check())
+
+    def test_notification_fetches_translation_on_cache_miss(self):
+        async def check():
+            plugin = main.Plugin()
+            plugin.settings = {**main.DEFAULT_SETTINGS, "achievement_language": "uk-UA"}
+            saved = {"ok": True, "titleId": "42", "achievements": [
+                {"id": "1", "name": "Назва", "description": "Опис"}]}
+            with patch.object(main, "get_title", return_value=saved), \
+                 patch.object(main, "translate_title", AsyncMock(return_value=saved)) as fetch:
+                result = await plugin._localized_notification({"titleId": "42", "id": "1", "name": "Original"})
+                self.assertEqual(result["name"], "Назва")
+                self.assertEqual(fetch.await_count, 1)
+        asyncio.run(check())

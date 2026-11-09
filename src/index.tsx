@@ -1,9 +1,13 @@
 import {
+  findClassModule,
+  replacePatch,
+  callOriginal,
   ButtonItem,
   DialogButton,
   DropdownItem,
   Focusable,
   Navigation,
+  NavEntryPositionPreferences,
   PanelSection,
   PanelSectionRow,
   SliderField,
@@ -11,15 +15,22 @@ import {
   ToggleField,
   staticClasses,
 } from "@decky/ui";
-import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster } from "@decky/api";
+import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster, openFilePicker, FileSelectionType } from "@decky/api";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { FaAward, FaGem, FaEye, FaEyeSlash, FaPlay, FaTrophy } from "react-icons/fa";
+import { FaEye, FaEyeSlash, FaPlay, FaTrophy } from "react-icons/fa";
+import { fitNotificationPopup } from "./notification-popup";
+import { NotificationAudio, observePopupSound, isNexusToast, type PopupPlayback, type SoundFiles } from "./notification-audio";
+import { installProfileGamerscore, setProfileGamerscoreEnabled, saveProfileGamerscore, useProfileGamerscore, refreshProfileGamerscore } from "./profile-gamerscore";
+import { installGameMenuButtons, invalidateGameMenuCache, setGameMenuEnabled, saveGameMenuButton, type MenuTarget } from "./game-menu";
+import { RareIcon, MythicIcon } from "./achievement-icons";
 import { SessionCache } from "./cache";
 import { matchesAchievementSet, type AchievementSet } from "./achievement-filters";
 import { getPluginLanguage, getPluginLanguagePreference, initializeSystemLanguage, setPluginLanguage, subscribeLanguage, translate, translateError, pluginLanguages, pluginLocales, type Message } from "./i18n";
 
 interface AchievementEvent {
   type: "achievement";
+  preview?: boolean;
+  rarity?: { percentage: number; category: "Rare" | "Common" };
   ts: string;
   titleId: string;
   scid: string;
@@ -32,6 +43,9 @@ interface AchievementEvent {
 
 interface Settings {
   enabled: boolean;
+  installed_games_only?: boolean;
+  game_menu_button?: boolean;
+  profile_gamerscore?: boolean;
   duration: number;
   events_path: string;
   show_secrets?: boolean;
@@ -40,13 +54,39 @@ interface Settings {
   group_achievements?: boolean;
   remember_game_view_settings?: boolean;
   resolved_path?: string;
+  test_notification_type?: NotificationKind;
+  notification_sounds?: SoundFiles;
+  notification_durations?: Partial<Record<NotificationKind, number>>;
+  notification_sound_durations?: Partial<Record<NotificationKind, number>>;
+  sound_picker_path?: string;
 }
 
 const getSettings = callable<[], Settings>("get_settings");
 const setSettings = callable<[boolean, number, string], Settings>("set_settings");
-const testNotification = callable<[string], void>("test_notification");
+type NotificationKind = "normal" | "rare" | "mythic";
+let selectedNotificationKind: NotificationKind = "normal";
+let notificationKindSaveQueue = Promise.resolve();
+let notificationDurationSaveQueue = Promise.resolve();
+const saveTestNotificationType = callable<[NotificationKind], NotificationKind>("set_test_notification_type");
+const testNotification = callable<[string, NotificationKind], void>("test_notification");
+const setSoundDuration = callable<[NotificationKind, string, number], Settings>("set_notification_sound_duration");
+const setNotificationDuration = callable<[NotificationKind, number], Partial<Record<NotificationKind, number>>>("set_notification_duration");
+const setNotificationSound = callable<[NotificationKind, string], SoundFiles>("set_notification_sound");
+const getNotificationAudio = callable<[NotificationKind], { data?: string; mime?: string }>("get_notification_audio");
+const notificationAudio = new NotificationAudio(getNotificationAudio);
+function customNotificationSound(kind: NotificationKind, isVisible: () => boolean) {
+  if (!notificationAudio.has(kind)) return;
+  void notificationAudio.play(kind, isVisible).catch(error => {
+    console.error("Nexus notification audio failed", error);
+    toaster.toast({ title: translate(getPluginLanguage(), "Could not play custom sound."),
+      body: translate(getPluginLanguage(), "Choose an audio file again or remove the custom sound."),
+      duration: 5000, playSound: false, showToast: true });
+  });
+}
+
 
 interface TitleSummary {
+  installed?: boolean;
   titleId: string;
   titleName: string;
   coverUrl?: string;
@@ -78,8 +118,17 @@ interface MythicCompletion {
   unlockedCount: number;
   completedAt: number | null;
 }
-interface MythicEvent { titleId: string; titleName: string; mythic: MythicCompletion; }
+interface MythicEvent { iconUrl?: string; preview?: boolean; titleId: string; titleName: string; mythic: MythicCompletion; }
 const mythicByTitle = new Map<string, MythicCompletion>();
+const mythicProgressListeners = new Set<() => void>();
+let mythicProgressRevision = 0;
+const getMythicProgress = callable<[], Record<string, MythicCompletion>>("get_mythic_progress");
+function useMythicProgress() {
+  useSyncExternalStore(callback => {
+    mythicProgressListeners.add(callback);
+    return () => { mythicProgressListeners.delete(callback); };
+  }, () => mythicProgressRevision);
+}
 
 interface TitleDetail {
   ok: boolean;
@@ -173,17 +222,82 @@ function AchievementLanguageSelector({ onChange }: { onChange?: () => void }) {
 
 const ROUTE = "/nexus-achievements";
 let requestedTitle: string | null = null;
+let requestedGame: TitleSummary | null = null;
+let requestedHideAllTitles = false;
+const allGamesListeners = new Set<() => void>();
+function openAllGamesAchievements() {
+  requestedTitle = null; requestedGame = null; requestedHideAllTitles = false;
+  allGamesListeners.forEach(listener => listener());
+  Navigation.Navigate(ROUTE); Navigation.CloseSideMenus();
+}
+function openGameAchievements(target: MenuTarget) {
+  requestedHideAllTitles = true;
+  requestedTitle = target.titleId;
+  requestedGame = { ...target, unlocked: target.unlocked ?? 0, total: target.total ?? 0, gamerscore: target.gamerscore ?? 0, gamerscoreTotal: target.gamerscoreTotal ?? 0, updatedAt: target.updatedAt ?? 0 };
+  Navigation.Navigate(ROUTE);
+  Navigation.CloseSideMenus();
+}
 const getRunningTitle = callable<[], TitleSummary | null>("get_running_title");
 
 // The toast runs in the Steam UI, so keep the duration locally.
 let currentDuration = 8000;
+let notificationDurations: Partial<Record<NotificationKind, number>> = {};
+type NotificationPlayback = PopupPlayback;
 
-function NotificationIcon({ url, mythic = false }: { url?: string; mythic?: boolean }) {
+const toastWindowClasses = findClassModule((value: any) => value.GamepadToastPlaceholder && value.GamepadToastPopup) as { GamepadToastPlaceholder: string } | undefined;
+
+function usePopupSound(ref: { current: HTMLDivElement | null }, playback?: NotificationPlayback) {
+  useEffect(() => {
+    const popup = ref.current?.closest<HTMLElement>(".DeckyGamepadUIPopupToast");
+    if (!popup || !toastWindowClasses) return;
+    const store = (window as any).SteamUIStore?.WindowStore;
+    const instances = [store?.GamepadUIMainWindowInstance, ...(store?.SteamUIWindows || [])];
+    for (const instance of instances) {
+      const doc = instance?.BrowserWindow?.window?.document as Document | undefined;
+      const placeholder = doc?.querySelector<HTMLElement>(`.${toastWindowClasses.GamepadToastPlaceholder}`);
+      if (placeholder) return fitNotificationPopup(popup, placeholder);
+    }
+    return undefined;
+  }, [playback]);
+  useEffect(() => {
+    if (!ref.current || !playback) return;
+    return observePopupSound(ref.current, playback, customNotificationSound);
+  }, [playback]);
+}
+
+
+function NotificationIcon({ url, mythic = false, rare = false, playback }: { url?: string; mythic?: boolean; rare?: boolean; playback?: NotificationPlayback }) {
+  const popupRef = useRef<HTMLDivElement>(null);
+  usePopupSound(popupRef, playback);
   const src = safeIcon(url || "");
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
-  return <div className="nexus-achievement-notification-logo" style={{ width: 44, height: 40, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+  return <div ref={popupRef} className="nexus-achievement-notification-logo" style={{ width: 44, height: 40, position: "relative", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
     <style>{`
+      .nexus-achievement-notification.DeckyGamepadUIPopupToast {
+        height: auto !important;
+        min-height: 40px !important;
+        max-height: none !important;
+        overflow: visible !important;
+      }
+      .nexus-notification-content {
+        text-align: left !important;
+        align-items: stretch !important;
+        min-width: 0;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+      }
+      .nexus-notification-content div {
+        text-align: left !important;
+        white-space: normal !important;
+        text-overflow: clip !important;
+        overflow: visible !important;
+        overflow-wrap: anywhere;
+        height: auto !important;
+        max-height: none !important;
+        -webkit-line-clamp: unset !important;
+      }
       .nexus-achievement-notification div:has(> .nexus-achievement-notification-logo) {
         display: flex !important;
         align-self: center !important;
@@ -198,44 +312,71 @@ function NotificationIcon({ url, mythic = false }: { url?: string; mythic?: bool
     `}</style>
     {src && !failed
       ? <img src={src} alt="" onError={() => setFailed(true)} style={{ width: 40, height: 40, borderRadius: 4, objectFit: "cover" }} />
-      : mythic ? <FaAward size={36} style={{ width: 36, height: 36, display: "block", color: "#8fdb8f", flexShrink: 0 }} />
       : <FaTrophy size={36} style={{ width: 36, height: 36, display: "block", flexShrink: 0 }} />}
+    {(mythic || rare) && <span role="img" aria-label={translate(getPluginLanguage(), mythic ? "Mythic" : "Rare")}
+      style={{ position: "absolute", right: 0, bottom: 0, width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", color: mythic ? "#8fdb8f" : "#7bd7ff" }}>
+      {mythic ? <MythicIcon size={20} /> : <RareIcon size={18} />}
+    </span>}
   </div>;
 }
 
-function showAchievement(event: AchievementEvent) {
-  achievementCache.clear();
-  gamesCache.invalidate("titles");
-  const score = typeof event.gamerscore === "number" ? `${event.gamerscore} G` : "";
-  const body = [event.description, score].filter(Boolean).join(" • ");
-  const logo = <NotificationIcon url={event.iconUrl} />;
+async function showAchievement(event: AchievementEvent) {
+  if (!event.preview) {
+    refreshProfileGamerscore();
+    invalidateGameMenuCache();
+    achievementCache.clear();
+    gamesCache.invalidate("titles");
+  }
+  const locale = getPluginLanguage();
+  const rarity = event.rarity;
+  const rare = rarity?.category === "Rare";
+  const rarityText = rarity && Number.isFinite(rarity.percentage) && rarity.percentage >= 0 && rarity.percentage <= 100
+    ? translate(locale, "{percentage} of players unlocked", { percentage: new Intl.NumberFormat(pluginLocales[locale], { style: "percent", maximumFractionDigits: 2 }).format(rarity.percentage / 100) }) : "";
+  const detailText = [event.description, rarityText].filter(Boolean).join(" • ");
+  const hasScore = typeof event.gamerscore === "number";
+  const body = <div style={{ width: "100%", minWidth: 0, textAlign: "left" }}>
+    {hasScore && <span className="nexus-notification-score" style={{ display: "inline-flex", alignItems: "center", gap: 4, marginRight: 6, whiteSpace: "nowrap" }}>
+      <GamerscoreIcon />{event.gamerscore}
+    </span>}
+    {detailText && <span style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>
+      {hasScore && "• "}{detailText}
+    </span>}
+  </div>;
+  const kind = rare ? "rare" : "normal";
+  const soundLength = await notificationAudio.duration(kind).catch(() => 0);
+  const logo = <NotificationIcon url={event.iconUrl} rare={rare} playback={{ kind, played: false }} />;
   toaster.toast({
     className: "nexus-achievement-notification",
-    title: translate(getPluginLanguage(), "Achievement unlocked: {name}", { name: event.name }),
+    contentClassName: "nexus-notification-content",
+    title: translate(locale, rare ? "Rare achievement unlocked: {name}" : "Achievement unlocked: {name}", { name: event.name }),
     body,
     logo,
-    duration: currentDuration,
-    playSound: true,
-    sound: 6,
+    duration: Math.max(notificationDurations[kind] ?? currentDuration, soundLength),
+    playSound: false,
     showToast: true,
   });
 }
 
-function showMythic(event: MythicEvent) {
-  mythicByTitle.set(event.titleId, event.mythic);
-  achievementCache.clear();
+async function showMythic(event: MythicEvent) {
+  const soundLength = await notificationAudio.duration("mythic").catch(() => 0);
+  if (!event.preview) {
+    refreshProfileGamerscore();
+    mythicByTitle.set(event.titleId, event.mythic);
+    achievementCache.clear();
+  }
   toaster.toast({
     className: "nexus-achievement-notification",
+    contentClassName: "nexus-notification-content",
     title: translate(getPluginLanguage(), "Mythic achievement unlocked"),
     body: translate(getPluginLanguage(), "Unlocked all {total} original achievements in {game}.", { total: event.mythic.totalCount, game: event.titleName }),
-    logo: <NotificationIcon mythic />, duration: currentDuration, playSound: true, sound: 6, showToast: true,
+    logo: <NotificationIcon url={event.iconUrl} mythic playback={{ kind: "mythic", played: false }} />, duration: Math.max(notificationDurations.mythic ?? currentDuration, soundLength), playSound: false, showToast: true,
   });
 }
 
 function MythicBadge() {
   const { t } = usePluginTranslation();
   return <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#8fdb8f", fontSize: 12 }}>
-    <FaAward aria-hidden="true" />{t("Mythic")}
+    <MythicIcon />{t("Mythic")}
   </span>;
 }
 
@@ -245,7 +386,9 @@ function MythicProgress({ detail, mythicOnly, onChange }: { detail: TitleDetail;
   if (!group) return <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 12 }}>
     {t(detail.mythicUnavailable === "backend" ? "Update the Nexus achievement backend for Mythic support." : "Mythic progress is unavailable for this game.")}
   </div>;
-  return <section style={{ padding: 12, marginBottom: 12, borderRadius: 10, background: "rgba(143,219,143,0.08)" }}>
+  return <section style={{ padding: 12, marginBottom: 12, borderRadius: 10, background: "rgba(143,219,143,0.08)", display: "flex", alignItems: "center", gap: 16 }}>
+    <div style={{ width: 80, height: 80, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}><MythicIcon size={80} /></div>
+    <div style={{ flex: 1, minWidth: 0 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       <strong>{t("Mythic achievement")}</strong>{group.unlocked && <MythicBadge />}
     </div>
@@ -256,6 +399,7 @@ function MythicProgress({ detail, mythicOnly, onChange }: { detail: TitleDetail;
     </div>
     <ToggleField label={t("Mythic achievements only")} description={t("Turn off to show all achievements.")}
       checked={mythicOnly} onChange={onChange} disabled={!detail.achievements.some(a => a.baseGame !== undefined)} />
+    </div>
   </section>;
 }
 
@@ -313,7 +457,7 @@ function GameCover({ url, mythic = false }: { url?: string; mythic?: boolean }) 
   const src = safeIcon(url || "");
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
-  return <div style={{ width: 60, height: 80, flexShrink: 0, borderRadius: 4, boxShadow: mythic ? "0 0 0 2px #8fdb8f" : undefined, overflow: "hidden", transform: "translateZ(0)", isolation: "isolate", background: "rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+  return <div style={{ width: 80, height: 80, aspectRatio: "1 / 1", flexShrink: 0, borderRadius: 4, boxShadow: mythic ? "0 0 0 2px #8fdb8f" : undefined, overflow: "hidden", transform: "translateZ(0)", isolation: "isolate", background: "rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "center" }}>
     {src && !failed ? <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} style={{ width: "100%", height: "100%", objectFit: "cover", imageRendering: "auto", display: "block" }} /> : <FaTrophy size={24} />}
   </div>;
 }
@@ -344,7 +488,7 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
         <div style={{ fontSize: 13, opacity: 0.8 }}>{hidden ? t("Keep playing to reveal this achievement.") : description}</div>
         {a.rarity && Number.isFinite(a.rarity.percentage) && a.rarity.percentage >= 0 && a.rarity.percentage <= 100 && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.8, marginTop: 4 }}>
-            {a.rarity.category === "Rare" && <><FaGem aria-hidden="true" /><span>{t("Rare")}</span><span>·</span></>}
+            {a.rarity.category === "Rare" && <><RareIcon /><span>{t("Rare")}</span><span>·</span></>}
             <span>{t("{percentage} of players unlocked", { percentage: new Intl.NumberFormat(pluginLocales[locale], { style: "percent", maximumFractionDigits: 2 }).format(a.rarity.percentage / 100) })}</span>
           </div>
         )}
@@ -358,7 +502,7 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
         {!a.unlocked && a.progress !== null && !hidden && <div style={{ fontSize: 12, opacity: 0.7 }}>{a.progress}%</div>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-        <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}>{hidden ? "?" : a.gamerscore} <GamerscoreIcon /></div>
+        <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}><GamerscoreIcon /> {hidden ? "?" : a.gamerscore}</div>
         {hasRevealButton && (
           <DialogButton
             className="nexus-secret-reveal"
@@ -385,7 +529,7 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
     focusClassName="nexus-achievement-row-focused" style={style}>{content}</Focusable>;
 }
 
-function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () => void; tick: number }) {
+function TitleView({ title, onBack, tick, hideAllTitles = false }: { title: TitleSummary; onBack: () => void; tick: number; hideAllTitles?: boolean }) {
   const { locale, t } = usePluginTranslation();
   const [languageRevision, setLanguageRevision] = useState(0);
   const [reveal, setReveal] = useState(false);
@@ -519,10 +663,10 @@ function TitleView({ title, onBack, tick }: { title: TitleSummary; onBack: () =>
           fill: currentColor;
         }
       `}</style>
-      <ButtonItem layout="below" onClick={onBack}>{t("← All titles")}</ButtonItem>
+      {!hideAllTitles && <ButtonItem layout="below" onClick={onBack}>{t("← All titles")}</ButtonItem>}
       <div style={{ display: "flex", alignItems: "center", gap: 16, margin: "8px 0" }}><GameCover url={title.coverUrl} mythic={detail?.mythic?.unlocked} /><h2>{title.titleName}</h2></div>
       <div style={{ opacity: 0.8, marginBottom: 8 }}>
-        {t("{unlocked}/{total} unlocked", { unlocked: title.unlocked, total: title.total })} • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon />
+        {t("{unlocked}/{total} unlocked", { unlocked: title.unlocked, total: title.total })} • <GamerscoreIcon /> {title.gamerscore}/{title.gamerscoreTotal}
       </div>
       <DropdownItem label={t("Filter")} rgOptions={FILTERS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={filter}
         onChange={o => updateView({ filter: o.data as Filter })} />
@@ -582,6 +726,7 @@ function TitleRow({ title, onSelect, playing = false, showPlayingText = false, f
   title: TitleSummary; onSelect: (titleId: string) => void; playing?: boolean; showPlayingText?: boolean; flushCover?: boolean;
 }) {
   const { t } = usePluginTranslation();
+  useMythicProgress();
   const mythic = mythicByTitle.get(title.titleId);
   const content = (
     <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left" }}>
@@ -594,7 +739,7 @@ function TitleRow({ title, onSelect, playing = false, showPlayingText = false, f
             <FaPlay aria-hidden="true" />{showPlayingText && t("Now playing")}
           </span>}
         </div>
-        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>{t("{unlocked}/{total} unlocked", { unlocked: title.unlocked, total: title.total })} • {title.gamerscore}/{title.gamerscoreTotal} <GamerscoreIcon /></div>
+        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>{t("{unlocked}/{total} unlocked", { unlocked: title.unlocked, total: title.total })} • <GamerscoreIcon /> {title.gamerscore}/{title.gamerscoreTotal}</div>
       </div>
     </div>
   );
@@ -603,13 +748,35 @@ function TitleRow({ title, onSelect, playing = false, showPlayingText = false, f
     : <ButtonItem layout="below" onClick={() => onSelect(title.titleId)}>{content}</ButtonItem>;
 }
 
+const saveInstalledGamesOnly = callable<[boolean], boolean>("set_installed_games_only");
+let installedGamesOnly = false;
+
 function AchievementsPage() {
   const { locale, t } = usePluginTranslation();
   const [titles, setTitles] = useState<TitleSummary[] | null>(() => gamesCache.peek("titles") ?? null);
   const [gameQuery, setGameQuery] = useState("");
+  const [installedOnly, setInstalledOnly] = useState(installedGamesOnly);
+  const [installedFilterError, setInstalledFilterError] = useState(false);
+  const installedFilterRevision = useRef(0);
+  useEffect(() => {
+    const revision = installedFilterRevision.current;
+    getSettings().then(settings => {
+      if (revision !== installedFilterRevision.current) return;
+      installedGamesOnly = settings.installed_games_only ?? false;
+      setInstalledOnly(installedGamesOnly);
+    }).catch(() => {});
+  }, []);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string | null>(() => { const title = requestedTitle; requestedTitle = null; return title; });
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [hideAllTitles, setHideAllTitles] = useState(requestedHideAllTitles);
+  const selectTitle = (id: string) => { setHideAllTitles(false); setSelected(id); };
   const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const listener = () => { setSelected(null); setHideAllTitles(false); };
+    allGamesListeners.add(listener);
+    return () => { allGamesListeners.delete(listener); };
+  }, []);
 
   const reload = useCallback(() => {
     // Recheck lightweight snapshot metadata while retaining the visible list.
@@ -633,49 +800,122 @@ function AchievementsPage() {
     return () => removeEventListener("achievement", listener);
   }, []);
 
-  const title = titles?.find(t => t.titleId === selected);
+  useEffect(() => {
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        const page = pageRef.current;
+        const first = page?.querySelector<HTMLElement>('button:not([disabled]), [tabindex="0"]');
+        first?.focus({ preventScroll: true });
+      });
+    });
+    return () => { cancelAnimationFrame(firstFrame); cancelAnimationFrame(secondFrame); };
+  }, [selected]);
+
+  const title = titles?.find(t => t.titleId === selected) ?? (requestedGame?.titleId === selected ? requestedGame : undefined);
   const matchingTitles = useMemo(() => {
     const query = gameQuery.trim().toLocaleLowerCase();
-    return titles?.filter(item => item.titleName.toLocaleLowerCase().includes(query)) ?? [];
-  }, [titles, gameQuery]);
+    return titles?.filter(item => (!installedOnly || item.installed === true) && item.titleName.toLocaleLowerCase().includes(query)) ?? [];
+  }, [titles, gameQuery, installedOnly]);
 
   return (
-    <div style={{ padding: "40px 24px 60px", marginTop: 40, height: "100%", overflowY: "auto", scrollPaddingBottom: 60, boxSizing: "border-box" }}>
+    <Focusable ref={pageRef} tabIndex={0} noFocusRing flow-children="column" navEntryPreferPosition={NavEntryPositionPreferences.FIRST} preferredFocus
+      onGamepadFocus={event => {
+        // Forward entry from Steam's header to a control, without redirecting descendant focus.
+        if (event.target !== pageRef.current) return;
+        pageRef.current?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex="0"]')?.focus({ preventScroll: true });
+      }}
+      style={{ padding: "40px 24px 60px", marginTop: 40, height: "100%", overflowY: "auto", scrollPaddingBottom: 60, boxSizing: "border-box" }}>
       {title ? (
-        <TitleView key={title.titleId} title={title} tick={tick} onBack={() => setSelected(null)} />
+        <TitleView key={title.titleId} title={title} tick={tick} hideAllTitles={hideAllTitles} onBack={() => setSelected(null)} />
       ) : (
         <div>
           <h1 style={{ margin: "0 0 12px" }}>{t("Nexus Achievements")}</h1>
-          <div style={{ marginBottom: 8 }}><RunningGame onSelect={setSelected} showPlayingText flushCover /></div>
-          <TextField label={t("Search games")} value={gameQuery} onChange={event => setGameQuery(event.target.value)} />
+          <div style={{ marginBottom: 8 }}><RunningGame onSelect={selectTitle} showPlayingText flushCover /></div>
+          <ToggleField label={t("Installed games only")} checked={installedOnly} onChange={async enabled => {
+            const revision = ++installedFilterRevision.current;
+            installedGamesOnly = enabled; setInstalledOnly(enabled); setInstalledFilterError(false);
+            try { await saveInstalledGamesOnly(enabled); }
+            catch { if (revision === installedFilterRevision.current) setInstalledFilterError(true); }
+          }} />
+          {installedFilterError && <div role="alert">{t("Could not save installed games filter.")}</div>}
+          <div style={{ marginTop: 12 }}>
+            <TextField label={t("Search games")} value={gameQuery} onChange={event => setGameQuery(event.target.value)} />
+          </div>
           {titles === null && <div>{t("Loading…")}</div>}
           {error && <div style={{ padding: 8 }}>{translateError(locale, error)}</div>}
           {titles && titles.length === 0 && !error && (
             <div style={{ opacity: 0.7 }}>{t("No achievements yet. Play a Nexus game to start unlocking.")}</div>
           )}
           {titles && titles.length > 0 && matchingTitles.length === 0 && !error && (
-            <div style={{ padding: "12px 0", opacity: 0.7 }}>{t("No games match your search.")}</div>
+            <div style={{ padding: "12px 0", opacity: 0.7 }}>{t("No games match these filters.")}</div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {matchingTitles.map(t => <TitleRow key={t.titleId} title={t} onSelect={setSelected} flushCover />)}
+            {matchingTitles.map(t => <TitleRow key={t.titleId} title={t} onSelect={selectTitle} flushCover />)}
           </div>
           <ButtonItem layout="below" onClick={reload}>{t("Refresh")}</ButtonItem>
         </div>
       )}
-    </div>
+    </Focusable>
   );
+}
+
+function DurationLabel({ label, seconds }: { label: string; seconds: number }) {
+  const { t } = usePluginTranslation();
+  return <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, width: "100%", minWidth: 0 }}>
+    <span style={{ flex: 1, minWidth: 0, whiteSpace: "normal" }}>{label}</span>
+    <span style={{ flexShrink: 0, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{t("{seconds} sec", { seconds })}</span>
+  </div>;
 }
 
 function Content() {
   const { t } = usePluginTranslation();
   const [settings, setLocal] = useState<Settings | null>(null);
   const [rememberError, setRememberError] = useState(false);
+  const [gameMenuError, setGameMenuError] = useState(false);
+  const [profileScoreError, setProfileScoreError] = useState(false);
+  const profileScore = useProfileGamerscore();
+  const [notificationKind, setNotificationKind] = useState<NotificationKind>(() => selectedNotificationKind);
+  const notificationOptions = useMemo(() => [
+    { data: "normal", label: t("Normal achievement") },
+    { data: "rare", label: t("Rare achievement") },
+    { data: "mythic", label: t("Mythic") },
+  ], [getPluginLanguage()]);
+  const [notificationError, setNotificationError] = useState(false);
+  const [durationError, setDurationError] = useState(false);
+  const [soundError, setSoundError] = useState(false);
+  const [soundBusy, setSoundBusy] = useState(false);
+  const soundFiles = useSyncExternalStore(notificationAudio.subscribe, notificationAudio.getFiles);
 
   useEffect(() => {
-    getSettings().then(s => { currentDuration = s.duration; setPluginLanguage(s.plugin_language || "system"); applyRememberGameView(s.remember_game_view_settings ?? true); setLocal(s); });
+    Promise.all([notificationKindSaveQueue, notificationDurationSaveQueue]).then(() => getSettings()).then(s => { setGameMenuEnabled(s.game_menu_button ?? true); setProfileGamerscoreEnabled(s.profile_gamerscore ?? false); currentDuration = s.duration; notificationDurations = s.notification_durations || {}; notificationAudio.configure(s.notification_sounds, s.notification_sound_durations); setPluginLanguage(s.plugin_language || "system"); applyRememberGameView(s.remember_game_view_settings ?? true);
+      const kind = s.test_notification_type;
+      selectedNotificationKind = kind === "rare" || kind === "mythic" ? kind : "normal";
+      setNotificationKind(selectedNotificationKind); setLocal(s); });
   }, []);
 
+  useEffect(() => {
+    if (!settings) return;
+    let active = true;
+    const pending = (["normal", "rare", "mythic"] as const).filter(kind => soundFiles[kind] && !settings.notification_sound_durations?.[kind]);
+    if (pending.length) {
+      void Promise.all(pending.map(async kind => {
+        const duration = await notificationAudio.duration(kind);
+        return setSoundDuration(kind, soundFiles[kind]!, duration);
+      })).then(() => getSettings()).then(saved => {
+        currentDuration = saved.duration; notificationDurations = saved.notification_durations || {};
+        if (active) setLocal(saved);
+      }).catch(() => { if (active) setSoundError(true); });
+    }
+    return () => { active = false; };
+  }, [soundFiles, settings?.notification_sound_durations, !!settings]);
+
   if (!settings) return null;
+  const soundMinimum = (kind: NotificationKind) => Math.max(2, Math.ceil((settings.notification_sound_durations?.[kind] || 0) / 1000));
+  const soundMaximum = (kind: NotificationKind) => Math.min(86400, Math.max(30,
+    soundMinimum(kind) > 30 ? soundMinimum(kind) + 30 : 30,
+    Math.ceil((kind === "normal" ? settings.duration : settings.notification_durations?.[kind] ?? settings.duration) / 1000)));
+  const measuringSound = (kind: NotificationKind) => !!soundFiles[kind] && !settings.notification_sound_durations?.[kind];
 
   const update = async (patch: Partial<Settings>) => {
     const next = { ...settings, ...patch };
@@ -684,10 +924,27 @@ function Content() {
     setLocal(await setSettings(next.enabled, next.duration, next.events_path));
   };
 
+  const saveSound = async (path: string) => {
+    setSoundBusy(true); setSoundError(false);
+    try {
+      const files = await setNotificationSound(notificationKind, path);
+      notificationAudio.invalidate(notificationKind);
+      notificationAudio.configure(files);
+      setLocal(previous => {
+        if (!previous) return previous;
+        const lengths = { ...previous.notification_sound_durations };
+        delete lengths[notificationKind];
+        return { ...previous, notification_sounds: files, notification_sound_durations: lengths };
+      });
+    } catch { setSoundError(true); }
+    finally { setSoundBusy(false); }
+  };
+  const soundPath = soundFiles[notificationKind];
+
   return (
     <PanelSection title={t("Nexus Achievements")}>
       <PanelSectionRow>
-        <RunningGame flushCover onSelect={titleId => { requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
+        <RunningGame flushCover onSelect={titleId => { requestedHideAllTitles = false; requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
       </PanelSectionRow>
       <PanelSectionRow>
         <ButtonItem layout="below" onClick={() => { Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }}>
@@ -699,17 +956,94 @@ function Content() {
           onChange={enabled => update({ enabled })} />
       </PanelSectionRow>
       <PanelSectionRow>
+        <ToggleField label={t("Show Nexus Achievements in game menus")} description={t("Add a button to the running game menu and library page.")}
+          checked={settings.game_menu_button ?? true} onChange={async enabled => {
+            setGameMenuError(false);
+            try {
+              const saved = await saveGameMenuButton(enabled);
+              setGameMenuEnabled(saved);
+              setLocal(previous => previous ? { ...previous, game_menu_button: saved } : previous);
+            } catch { setGameMenuError(true); }
+          }} />
+        {gameMenuError && <div role="alert">{t("Could not save game menu preference.")}</div>}
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ToggleField label={t("Show profile Gamerscore in status bar")} description={t("Display your Xbox profile’s total Gamerscore in the SteamOS header.")}
+          checked={settings.profile_gamerscore ?? false} onChange={async enabled => {
+            setProfileScoreError(false);
+            try {
+              const saved = await saveProfileGamerscore(enabled);
+              setProfileGamerscoreEnabled(saved);
+              setLocal(previous => previous ? { ...previous, profile_gamerscore: saved } : previous);
+            } catch { setProfileScoreError(true); }
+          }} />
+        {profileScoreError && <div role="alert">{t("Could not save profile Gamerscore preference.")}</div>}
+        {profileScore.enabled && profileScore.unavailable && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("Profile Gamerscore unavailable. Check your Nexus sign-in and update the achievement backend.")}</div>}
+      </PanelSectionRow>
+      <PanelSectionRow>
         <AchievementLanguageSelector />
       </PanelSectionRow>
       <PanelSectionRow>
-        <SliderField label={t("Duration (seconds)")} min={2} max={30} step={1}
-          value={Math.round(settings.duration / 1000)} showValue
+        <SliderField layout="below" showValue={false} label={<DurationLabel label={t("Normal notification")} seconds={Math.max(soundMinimum("normal"), Math.round(settings.duration / 1000))} />} min={soundMinimum("normal")} max={soundMaximum("normal")} disabled={measuringSound("normal")} step={1}
+          value={Math.max(soundMinimum("normal"), Math.round(settings.duration / 1000))}
           onChange={seconds => update({ duration: seconds * 1000 })} />
       </PanelSectionRow>
+      {(["rare", "mythic"] as const).map(kind => <PanelSectionRow key={kind}>
+        <SliderField layout="below" showValue={false} label={<DurationLabel label={t(kind === "rare" ? "Rare notification" : "Mythic notification")} seconds={Math.max(soundMinimum(kind), Math.round((settings.notification_durations?.[kind] ?? settings.duration) / 1000))} />}
+          min={soundMinimum(kind)} max={soundMaximum(kind)} disabled={measuringSound(kind)} step={1}
+          value={Math.max(soundMinimum(kind), Math.round((settings.notification_durations?.[kind] ?? settings.duration) / 1000))}
+          onChange={async seconds => {
+            const duration = seconds * 1000;
+            notificationDurations = { ...notificationDurations, [kind]: duration };
+            setLocal(previous => previous ? { ...previous, notification_durations: { ...previous.notification_durations, [kind]: duration } } : previous);
+            setDurationError(false);
+            const saved = notificationDurationSaveQueue.then(() => setNotificationDuration(kind, duration));
+            notificationDurationSaveQueue = saved.then(() => undefined, () => undefined);
+            try { await saved; }
+            catch { setDurationError(true); }
+          }} />
+      </PanelSectionRow>)}
+      {durationError && <PanelSectionRow><div role="alert">{t("Could not save notification duration.")}</div></PanelSectionRow>}
       <PanelSectionRow>
-        <ButtonItem layout="below" onClick={() => testNotification(getPluginLanguage())}>
+        <DropdownItem label={t("Test notification type")} selectedOption={notificationKind}
+          rgOptions={notificationOptions}
+          onChange={async option => {
+            const kind = option.data as NotificationKind;
+            selectedNotificationKind = kind;
+            setNotificationKind(kind); setNotificationError(false);
+            const saved = notificationKindSaveQueue.then(() => saveTestNotificationType(kind));
+            notificationKindSaveQueue = saved.then(() => undefined, () => undefined);
+            try { await saved; }
+            catch { setNotificationError(true); }
+          }} />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem layout="below" disabled={soundBusy} description={soundPath?.split("/").pop() || t("Silent")}
+          onClick={async () => {
+            let file;
+            try { file = await openFilePicker(FileSelectionType.FILE, settings.sound_picker_path || "/home/deck", true, true, undefined, ["wav", "mp3", "ogg", "flac"]); }
+            catch { return; }
+            await saveSound(file.realpath || file.path);
+          }}>{t("Choose custom sound")}</ButtonItem>
+      </PanelSectionRow>
+      {soundPath && <PanelSectionRow>
+        <ButtonItem layout="below" disabled={soundBusy} onClick={async () => {
+          setSoundError(false);
+          try { await notificationAudio.play(notificationKind); }
+          catch { setSoundError(true); }
+        }}>{t("Preview custom sound")}</ButtonItem>
+        <ButtonItem layout="below" disabled={soundBusy} onClick={() => saveSound("")}>{t("Remove custom sound")}</ButtonItem>
+      </PanelSectionRow>}
+      {soundError && <PanelSectionRow><div role="alert">{t("Could not use this audio file. Choose a WAV, MP3, OGG, or FLAC file up to 5 MB.")}</div></PanelSectionRow>}
+      <PanelSectionRow>
+        <ButtonItem layout="below" onClick={async () => {
+          setNotificationError(false);
+          try { await testNotification(getPluginLanguage(), notificationKind); }
+          catch { setNotificationError(true); }
+        }}>
           {t("Send test notification")}
         </ButtonItem>
+        {notificationError && <div role="alert">{t("Could not send test notification.")}</div>}
       </PanelSectionRow>
       <PanelSectionRow>
         <div style={{ fontSize: 11, opacity: 0.7, wordBreak: "break-all" }}>
@@ -737,11 +1071,33 @@ function Content() {
 }
 
 export default definePlugin(() => {
+  const removeGameMenuButtons = installGameMenuButtons(openGameAchievements, <GamerscoreIcon />);
+  const removeProfileGamerscore = installProfileGamerscore(<GamerscoreIcon />, openAllGamesAchievements);
+  // Current Steam builds reselect their built-in sound at popup dispatch.
+  const store = (window as unknown as { NotificationStore?: { PlayNotificationSound: (toast: unknown) => unknown } }).NotificationStore;
+  const soundPatch = store?.PlayNotificationSound ? replacePatch(store, "PlayNotificationSound", args =>
+    isNexusToast(args[0]) ? undefined : callOriginal) : undefined;
   void initializeSystemLanguage(() => window.SteamClient.Settings.GetCurrentLanguage());
-  getSettings().then(s => { currentDuration = s.duration; setPluginLanguage(s.plugin_language || "system"); applyRememberGameView(s.remember_game_view_settings ?? true); }).catch(() => {});
+  getSettings().then(s => { setGameMenuEnabled(s.game_menu_button ?? true); setProfileGamerscoreEnabled(s.profile_gamerscore ?? false); currentDuration = s.duration; notificationDurations = s.notification_durations || {}; notificationAudio.configure(s.notification_sounds, s.notification_sound_durations); setPluginLanguage(s.plugin_language || "system"); applyRememberGameView(s.remember_game_view_settings ?? true); }).catch(() => {});
   routerHook.addRoute(ROUTE, AchievementsPage, { exact: true });
   const listener = addEventListener<[AchievementEvent]>("achievement", showAchievement);
   const mythicListener = addEventListener<[MythicEvent]>("mythic", showMythic);
+  let progressDisposed = false;
+  const refreshMythicProgress = async () => {
+    try {
+      const progress = await getMythicProgress();
+      if (progressDisposed) return;
+      let changed = false;
+      for (const [id, mythic] of Object.entries(progress)) {
+        if (JSON.stringify(mythicByTitle.get(id)) === JSON.stringify(mythic)) continue;
+        mythicByTitle.set(id, mythic);
+        changed = true;
+      }
+      if (changed) { mythicProgressRevision++; mythicProgressListeners.forEach(listener => listener()); }
+    } catch { /* Retry on the next poll if the backend is starting. */ }
+  };
+  void refreshMythicProgress();
+  const mythicProgressTimer = setInterval(() => { void refreshMythicProgress(); }, 15000);
 
   return {
     name: "Nexus Achievements",
@@ -749,6 +1105,13 @@ export default definePlugin(() => {
     content: <Content />,
     icon: <FaTrophy />,
     onDismount() {
+      progressDisposed = true;
+      clearInterval(mythicProgressTimer);
+      removeProfileGamerscore();
+      removeGameMenuButtons();
+      requestedGame = null;
+      soundPatch?.unpatch();
+      notificationAudio.dispose();
       achievementCache.clear();
       gamesCache.clear();
       gameViewCache.clear();
