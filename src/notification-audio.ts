@@ -135,3 +135,10 @@ export function isNexusToast(value: unknown): boolean {
         && row.data.className.split(/\s+/).includes("nexus-achievement-notification");
     }));
 }
+
+export function shouldSuppressNexusSound(value: unknown): boolean {
+  if (!isNexusToast(value)) return false;
+  const toast = value as { data?: { playSound?: boolean }; notifications?: unknown[] };
+  if (Array.isArray(toast.notifications)) return toast.notifications.some(shouldSuppressNexusSound);
+  return toast.data?.playSound !== true;
+}
