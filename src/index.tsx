@@ -533,7 +533,7 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
     focusClassName="nexus-achievement-row-focused" style={style}>{content}</Focusable>;
 }
 
-function TitleView({ title, onBack, tick, hideAllTitles = false }: { title: TitleSummary; onBack: () => void; tick: number; hideAllTitles?: boolean }) {
+function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
   const { locale, t } = usePluginTranslation();
   const [languageRevision, setLanguageRevision] = useState(0);
   const [reveal, setReveal] = useState(false);
@@ -663,7 +663,7 @@ function TitleView({ title, onBack, tick, hideAllTitles = false }: { title: Titl
           fill: currentColor;
         }
       `}</style>
-      {!hideAllTitles && <ButtonItem layout="below" onClick={onBack}>{t("← All titles")}</ButtonItem>}
+
       <div style={{ display: "flex", alignItems: "center", gap: 16, margin: "8px 0" }}><GameCover url={title.coverUrl} mythic={detail?.mythic?.unlocked} /><h2>{title.titleName}</h2></div>
       <div style={{ opacity: 0.8, marginBottom: 8 }}>
         {t("{unlocked}/{total} unlocked", { unlocked: title.unlocked, total: title.total })} • <GamerscoreIcon /> {title.gamerscore}/{title.gamerscoreTotal}
@@ -832,6 +832,13 @@ function AchievementsPage() {
 
   return (
     <Focusable ref={pageRef} tabIndex={0} noFocusRing flow-children="column" navEntryPreferPosition={NavEntryPositionPreferences.FIRST} preferredFocus
+      onCancelActionDescription={t(title && !hideAllTitles ? "All titles" : "Back")}
+      onCancelButton={event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (title && !hideAllTitles) setSelected(null);
+        else Navigation.NavigateBack();
+      }}
       onGamepadFocus={event => {
         // Forward entry from Steam's header to a control, without redirecting descendant focus.
         if (event.target !== pageRef.current) return;
@@ -839,7 +846,7 @@ function AchievementsPage() {
       }}
       style={{ padding: "40px 24px 60px", marginTop: 40, height: "100%", overflowY: "auto", scrollPaddingBottom: 60, boxSizing: "border-box" }}>
       {title ? (
-        <TitleView key={title.titleId} title={title} tick={tick} hideAllTitles={hideAllTitles} onBack={() => setSelected(null)} />
+        <TitleView key={title.titleId} title={title} tick={tick} />
       ) : (
         <div>
           <h1 style={{ margin: "0 0 12px" }}>{t("Nexus Achievements")}</h1>
