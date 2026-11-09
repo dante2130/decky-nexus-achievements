@@ -13,7 +13,9 @@
     "test:icons": "node --test tests/achievement-icons.test.mjs",
     "test:built-icons": "node --test tests/compiled-icons.test.mjs",
     "test:header": "node --test tests/game-header-entries.test.mjs",
-    "test:status-navigation": "node --test tests/profile-status-navigation.test.mjs"
+    "test:status-navigation": "node --test tests/profile-status-navigation.test.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "license": "MIT",
   "dependencies": {
@@ -27,5 +29,13 @@
     "@types/react-dom": "18.3.0",
     "rollup": "^4.22.5",
     "typescript": "^5.6.2"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dante2130/decky-nexus-achievements.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dante2130/decky-nexus-achievements/issues"
+  },
+  "homepage": "https://github.com/dante2130/decky-nexus-achievements#readme"
 }

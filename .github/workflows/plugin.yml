@@ -1,0 +1,39 @@
+name: Plugin checks and build
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  plugin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: python3 -m unittest discover -s tests
+      - run: npm run build
+      - run: npm test
+      - run: git diff --check
+      - name: Package plugin
+        run: |
+          mkdir -p package/decky-nexus-achievements
+          cp -R dist main.py achievement_language.py mythic.py steam_menu.py plugin.json package.json LICENSE README.md package/decky-nexus-achievements/
+          tar --owner=0 --group=0 -czf decky-nexus-achievements.tar.gz -C package decky-nexus-achievements
+          sha256sum decky-nexus-achievements.tar.gz > decky-nexus-achievements.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: decky-nexus-achievements
+          path: |
+            decky-nexus-achievements.tar.gz
+            decky-nexus-achievements.tar.gz.sha256

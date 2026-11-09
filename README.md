@@ -1,5 +1,10 @@
 # Nexus Achievements (Decky plugin)
 
+Standalone plugin repository, extracted from [nexus-runtime](https://github.com/dante2130/nexus-runtime) with its plugin Git history.
+
+Clone: `git clone https://github.com/dante2130/decky-nexus-achievements.git`.
+Use Node.js 24 and Python 3.9 or newer. Run `npm ci`, `npm run typecheck`, `npm run build`, `npm test`, and `python3 -m unittest discover -s tests`.
+
 Xbox-style achievement toasts in Game Mode on Steam Deck for games running on the Nexus runtime.
 
 ## How it works
@@ -92,8 +97,8 @@ those use the separate achievement-language selector below.
 ### Achievement language
 
 Choose **Achievement language** in the plugin panel or a title's achievement
-page. This changes achievement names and descriptions in the viewer; menus and
-notification text are unchanged. The choice is saved across restarts. **Original
+page. This changes achievement names and descriptions in the viewer and unlock
+notifications; interface headings use the separate plugin language setting. The choice is saved across restarts. **Original
 (saved by Nexus)** preserves the snapshot's names and descriptions. The plugin
 may still fetch Mythic completion metadata when a compatible backend is installed.
 Other languages fetch localized text from Xbox through the signed-in Nexus
@@ -195,3 +200,5 @@ Notification text wraps onto multiple lines. Nexus resizes the managed popup pla
 The persistent status-bar fallback uses a regular click control and does not register a controller-navigation node across Steam windows. Native controller focus is added only within the Gamepad header; Frame and VR headers are left untouched.
 
 Mythic progress loads in the background at plugin startup for all saved games, then refreshes every ten minutes. The games list updates as results arrive without opening individual games. The initial scan does not announce historical completions. Xbox sign-in and a connection are required to fetch progress.
+
+The initial local game view includes preloaded Mythic progress, Original/Add-on membership, and selected-language text. The startup scan also warms localized notification text; changing achievement language requests a new background scan.
