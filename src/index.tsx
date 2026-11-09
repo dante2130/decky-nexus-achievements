@@ -8,6 +8,7 @@ import {
   Dropdown,
   Field,
   Focusable,
+  GamepadButton,
   Navigation,
   NavEntryPositionPreferences,
   PanelSection,
@@ -19,14 +20,15 @@ import {
 } from "@decky/ui";
 import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster, openFilePicker, FileSelectionType } from "@decky/api";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { FaEye, FaEyeSlash, FaPlay, FaTrophy } from "react-icons/fa";
+import { FaEye, FaEyeSlash, FaPlay, FaTrophy, FaSignInAlt, FaLink, FaUnlink, FaExternalLinkAlt, FaSpinner } from "react-icons/fa";
 import { fitNotificationPopup } from "./notification-popup";
 import { NotificationAudio, observePopupSound, isNexusToast, type PopupPlayback, type SoundFiles } from "./notification-audio";
 import { installProfileGamerscore, setProfileGamerscoreEnabled, saveProfileGamerscore, useProfileGamerscore, refreshProfileGamerscore } from "./profile-gamerscore";
 import { installGameMenuButtons, invalidateGameMenuCache, setGameMenuEnabled, saveGameMenuButton, type MenuTarget } from "./game-menu";
-import { RareIcon, MythicIcon } from "./achievement-icons";
+import { RareIcon, MythicIcon, TAIcon } from "./achievement-icons";
 import { compareAchievements, type AchievementSort, type SortDirection } from "./achievement-sorting";
 import { SessionCache } from "./cache";
+import { taFlags, matchesTAFlag, flagsForGame } from "./ta-flags";
 import { matchesAchievementSet, type AchievementSet } from "./achievement-filters";
 import { getPluginLanguage, getPluginLanguagePreference, initializeSystemLanguage, setPluginLanguage, subscribeLanguage, translate, translateError, pluginLanguages, pluginLocales, type Message } from "./i18n";
 
@@ -98,6 +100,92 @@ interface TitleSummary {
   gamerscore: number;
   gamerscoreTotal: number;
   updatedAt: number;
+}
+
+interface TAAchievement { url: string; flags: string[]; missable?: boolean; }
+interface TAMetadata { url?: string; status: "ready" | "stale" | "unavailable"; achievements: Record<string, TAAchievement>; }
+const getTrueAchievements = callable<[string], TAMetadata>("get_trueachievements");
+
+interface TASessionStatus { status: "disconnected" | "connected" | "saved" | "expired"; error?: string; }
+const getTASession = callable<[], TASessionStatus>("get_ta_session");
+const connectTASession = callable<[], TASessionStatus>("connect_ta_session");
+const disconnectTASession = callable<[], TASessionStatus>("disconnect_ta_session");
+let taSessionRevision = 0;
+const taSessionListeners = new Set<() => void>();
+function notifyTASessionChanged() {
+  taSessionRevision++;
+  for (const listener of taSessionListeners) listener();
+}
+function useTASessionRevision() {
+  return useSyncExternalStore(listener => {
+    taSessionListeners.add(listener);
+    return () => { taSessionListeners.delete(listener); };
+  }, () => taSessionRevision);
+}
+function TAAccount({ gameTitleId }: { gameTitleId?: string } = {}) {
+  const { t } = usePluginTranslation();
+  const [session, setSession] = useState<TASessionStatus>({ status: "disconnected" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<Message | null>(null);
+  const revision = useTASessionRevision();
+  const requestRevision = useRef(0);
+  useEffect(() => {
+    let live = true;
+    const request = ++requestRevision.current;
+    getTASession().then(value => {
+      if (!live || request !== requestRevision.current) return;
+      if (value.error) setError("Could not check TA session.");
+      else setSession(value);
+    }).catch(() => { if (live && request === requestRevision.current) setError("Could not check TA session."); });
+    return () => { live = false; };
+  }, [revision]);
+  const changeSession = async (disconnect: boolean) => {
+    ++requestRevision.current;
+    setBusy(true); setError(null);
+    try {
+      const result = await (disconnect ? disconnectTASession() : connectTASession());
+      setSession(result);
+      if (result.error) setError(result.error === "browser_unavailable"
+        ? "Keep TrueAchievements open in the Steam browser, then try connecting again."
+        : result.error === "login_required" ? "Finish signing in on TrueAchievements, then connect again."
+        : "Could not connect TA session.");
+      else notifyTASessionChanged();
+    } catch { setError("Could not connect TA session."); }
+    finally { setBusy(false); }
+  };
+  const connected = session.status === "connected" || session.status === "saved";
+  const description = t(busy ? "Connecting…" : connected ? "TA session saved on this device." : session.status === "expired" ? "TA session expired. Sign in again." : "Sign in in the Steam browser, then connect your session here.");
+  if (gameTitleId) {
+    const iconStyle = { width: 36, minWidth: 36, height: 36, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" };
+    return <div className="nexus-ta-row">
+      <Field label="TrueAchievements" description={description} childrenContainerWidth="min" verticalAlignment="center">
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <DialogButton style={iconStyle} disabled={busy} onOKActionDescription={t("Sign in to TrueAchievements")} aria-label={t("Sign in to TrueAchievements")}
+            onClick={() => Navigation.NavigateToExternalWeb("https://www.trueachievements.com")}><FaSignInAlt /></DialogButton>
+          <DialogButton style={iconStyle} disabled={busy} onOKActionDescription={t("Connect browser session")} aria-label={t("Connect browser session")}
+            onClick={() => changeSession(false)}>{busy ? <FaSpinner /> : <FaLink />}</DialogButton>
+          {connected && <DialogButton style={iconStyle} disabled={busy} onOKActionDescription={t("Disconnect TA session")} aria-label={t("Disconnect TA session")}
+            onClick={() => changeSession(true)}><FaUnlink /></DialogButton>}
+          <DialogButton style={iconStyle} onOKActionDescription={t("View on TrueAchievements")} aria-label={t("View on TrueAchievements")}
+            onClick={() => Navigation.NavigateToExternalWeb(`https://www.trueachievements.com/deeplink/${encodeURIComponent(gameTitleId)}`)}><FaExternalLinkAlt /></DialogButton>
+        </div>
+      </Field>
+      <div role={error ? "alert" : "status"} aria-live="polite" style={{ fontSize: 12, color: error ? "#ffcf70" : undefined }}>{error ? t(error) : busy ? t("Connecting…") : ""}</div>
+    </div>;
+  }
+  return <div>
+    <Field label="TrueAchievements" description={description} />
+    <ButtonItem layout="below" disabled={busy} onClick={() => Navigation.NavigateToExternalWeb("https://www.trueachievements.com")}>
+      {t("Sign in to TrueAchievements")}
+    </ButtonItem>
+    <ButtonItem layout="below" disabled={busy} onClick={() => changeSession(false)}>
+      {t(busy ? "Connecting…" : "Connect browser session")}
+    </ButtonItem>
+    {(connected || session.status === "expired") && <ButtonItem layout="below" disabled={busy} onClick={() => changeSession(true)}>
+      {t("Disconnect TA session")}
+    </ButtonItem>}
+    {error && <div role="alert">{t(error)}</div>}
+  </div>;
 }
 
 interface Achievement {
@@ -408,10 +496,10 @@ function MythicProgress({ detail, mythicOnly, onChange }: { detail: TitleDetail;
 
 type Filter = "all" | "unlocked" | "locked";
 type Sort = AchievementSort;
-interface GameViewSettings { filter: Filter; sort: Sort; sortDirection: SortDirection; contentFilter: AchievementSet; }
+interface GameViewSettings { taFilter?: string; filter: Filter; sort: Sort; sortDirection: SortDirection; contentFilter: AchievementSet; }
 const DEFAULT_GAME_VIEW: GameViewSettings = { filter: "all", sort: "date", sortDirection: "desc", contentFilter: "all" };
 const getGameViewSettings = callable<[string], GameViewSettings>("get_game_view_settings");
-const setGameViewSettings = callable<[string, Filter, Sort, AchievementSet, SortDirection], GameViewSettings>("set_game_view_settings");
+const setGameViewSettings = callable<[string, Filter, Sort, AchievementSet, SortDirection, string], GameViewSettings>("set_game_view_settings");
 const gameViewCache = new Map<string, GameViewSettings>();
 let rememberGameView = true;
 let gameViewPreferenceGeneration = 0;
@@ -425,7 +513,7 @@ let gameViewSaveQueue = Promise.resolve();
 function saveGameView(titleId: string, value: GameViewSettings): Promise<GameViewSettings> {
   const generation = gameViewPreferenceGeneration;
   const result = gameViewSaveQueue.then(() => rememberGameView && generation === gameViewPreferenceGeneration
-    ? setGameViewSettings(titleId, value.filter, value.sort, value.contentFilter, value.sortDirection) : value);
+    ? setGameViewSettings(titleId, value.filter, value.sort, value.contentFilter, value.sortDirection, value.taFilter ?? "all") : value);
   gameViewSaveQueue = result.then(() => undefined, () => undefined);
   return result;
 }
@@ -477,7 +565,7 @@ function GamerscoreIcon() {
   );
 }
 
-function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boolean; onToggle: () => void }) {
+function AchievementRow({ a, ta, reveal, onToggle, onFlag }: { a: Achievement; ta?: TAAchievement; reveal: boolean; onToggle: () => void; onFlag: (flag: string) => void }) {
   const { locale, t } = usePluginTranslation();
   const rowRef = useRef<HTMLDivElement>(null);
   const hasRevealButton = a.secret && !a.unlocked;
@@ -496,6 +584,15 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
             <span>{t("{percentage} of players unlocked", { percentage: new Intl.NumberFormat(pluginLocales[locale], { style: "percent", maximumFractionDigits: 2 }).format(a.rarity.percentage / 100) })}</span>
           </div>
         )}
+        {!hidden && ta?.flags && ta.flags.length > 0 && <Focusable flow-children="row" className="nexus-ta-flags" style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+          {taFlags.filter(flag => ta.flags.includes(flag.id)).map(flag => <DialogButton key={flag.id} noFocusRing
+            className={`nexus-row-action nexus-ta-action nexus-ta-flag nexus-ta-${flag.id}`} aria-label={t("Filter by {flag}", { flag: t(flag.label as Message) })}
+            onOKActionDescription={t("Filter by {flag}", { flag: t(flag.label as Message) })}
+            onClick={() => onFlag(flag.id)} onGamepadFocus={() => rowRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" })}
+            style={{ width: "auto", minWidth: 0, height: "auto", fontSize: 11, border: "1px solid currentColor", borderRadius: 4, padding: "3px 5px", display: "flex", alignItems: "center", gap: 4 }}>
+            <TAIcon size={14} />{t(flag.label as Message)}
+          </DialogButton>)}
+        </Focusable>}
         {a.baseGame === false && <div style={{ fontSize: 11, opacity: 0.7 }}>{t("Add-on")}</div>}
         {!a.unlocked && a.progress !== null && !hidden && (
           <div style={{ marginTop: 4, height: 6, background: "rgba(255,255,255,0.15)", borderRadius: 3 }}>
@@ -505,11 +602,13 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
         {a.unlocked && a.unlockedAt && <div style={{ fontSize: 12, opacity: 0.7 }}>{t("Unlocked {date}", { date: fmtDate(a.unlockedAt) })}</div>}
         {!a.unlocked && a.progress !== null && !hidden && <div style={{ fontSize: 12, opacity: 0.7 }}>{a.progress}%</div>}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+      <Focusable flow-children="column" className="nexus-achievement-actions" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
         <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}><GamerscoreIcon /> {hidden ? "?" : a.gamerscore}</div>
+        {!hidden && ta && <DialogButton className="nexus-row-action nexus-ta-action nexus-ta-guide" noFocusRing style={{ width: "auto", minWidth: 0, height: 32, padding: "0 12px" }}
+          aria-label={t("View on TrueAchievements")} onClick={() => Navigation.NavigateToExternalWeb(ta.url)}><TAIcon size={22} /></DialogButton>}
         {hasRevealButton && (
           <DialogButton
-            className="nexus-secret-reveal"
+            className="nexus-row-action nexus-secret-reveal"
             preferredFocus
             noFocusRing
             onGamepadFocus={() => {
@@ -521,20 +620,39 @@ function AchievementRow({ a, reveal, onToggle }: { a: Achievement; reveal: boole
             {reveal ? <FaEyeSlash /> : <FaEye />}
           </DialogButton>
         )}
-      </div>
+      </Focusable>
   </>;
   const style = { display: "flex", gap: 12, padding: "8px", borderRadius: 10, opacity: a.unlocked ? 1 : 0.65 };
-  // Secret rows expose only the native reveal button as a navigation target.
-  if (hasRevealButton) return <div ref={rowRef} style={style}
-    className="nexus-achievement-row">{content}</div>;
-  return <Focusable ref={rowRef} tabIndex={0} noFocusRing className="nexus-achievement-row"
-    aria-label={name} onActivate={() => { /* Read-only navigation target. */ }}
+  return <Focusable ref={rowRef} {...(hasRevealButton || ta ? {} : { tabIndex: 0, onActivate: () => {} })} noFocusRing
+    flow-children="row" className="nexus-achievement-row" focusWithinClassName="nexus-achievement-row-focused"
+    aria-label={hidden ? t("Secret achievement") : name}
+    onSecondaryActionDescription={hasRevealButton ? t(reveal ? "Hide secret achievement" : "Show secret achievement") : undefined}
+    actionDescriptionMap={ta ? { [GamepadButton.BUMPER_RIGHT]: t("View on TrueAchievements") } : undefined}
+    onSecondaryButton={event => {
+      if (!hasRevealButton) return;
+      event.preventDefault(); event.stopPropagation();
+      if (!event.detail.is_repeat) onToggle();
+    }}
+    onButtonDown={event => {
+      if (event.detail.button !== GamepadButton.BUMPER_RIGHT || !ta) return;
+      event.preventDefault(); event.stopPropagation();
+      if (!event.detail.is_repeat) Navigation.NavigateToExternalWeb(ta.url);
+    }}
     onGamepadFocus={() => rowRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" })}
     focusClassName="nexus-achievement-row-focused" style={style}>{content}</Focusable>;
 }
 
 function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
   const { locale, t } = usePluginTranslation();
+  const [ta, setTA] = useState<TAMetadata | null>(null);
+  const taRevision = useTASessionRevision();
+  useEffect(() => {
+    let live = true;
+    setTA(null);
+    getTrueAchievements(title.titleId).then(value => { if (live) setTA(value); })
+      .catch(() => { if (live) setTA({ status: "unavailable", achievements: {} }); });
+    return () => { live = false; };
+  }, [title.titleId, taRevision]);
   const [languageRevision, setLanguageRevision] = useState(0);
   const [reveal, setReveal] = useState(false);
   const [grouped, setGrouped] = useState(false);
@@ -548,7 +666,7 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
   const isRevealed = (a: Achievement) => overrides[a.id] ?? reveal;
   const [detail, setDetail] = useState<TitleDetail | null>(() => achievementCache.peek(achievementCacheKey(title)) ?? null);
   const [view, setView] = useState<GameViewSettings>(() => (rememberGameView ? gameViewCache.get(title.titleId) : undefined) ?? DEFAULT_GAME_VIEW);
-  const { filter, sort, sortDirection, contentFilter } = view;
+  const { filter, sort, sortDirection, contentFilter, taFilter = "all" } = view;
   const [viewError, setViewError] = useState<Message | null>(null);
   const viewRevision = useRef(0);
   const viewMounted = useRef(false);
@@ -608,18 +726,21 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
     return () => removeEventListener("mythic", listener);
   }, [title.titleId]);
 
+  const availableFlags = useMemo(() => flagsForGame(detail?.achievements ?? [], ta?.achievements ?? {}), [detail, ta]);
+  const selectedTAFilter = availableFlags.some(flag => `ta:${flag.id}` === taFilter) ? taFilter : "all";
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = (detail?.achievements ?? []).filter(a => {
       if (!matchesAchievementSet(a, contentFilter)) return false;
       if (filter === "unlocked" && !a.unlocked) return false;
       if (filter === "locked" && a.unlocked) return false;
+      if (!matchesTAFlag(ta?.achievements[a.id], selectedTAFilter)) return false;
       if (!q) return true;
       const hidden = a.secret && !a.unlocked && !isRevealed(a);
       return !hidden && (a.name.toLowerCase().includes(q) || a.description.toLowerCase().includes(q));
     });
     return list.sort((x, y) => compareAchievements(x, y, sort, sortDirection));
-  }, [detail, filter, sort, sortDirection, query, reveal, overrides, contentFilter]);
+  }, [detail, filter, sort, sortDirection, query, reveal, overrides, contentFilter, ta, selectedTAFilter]);
   const membershipPending = contentFilter !== "all" && detail?.ok && !detail.mythic && !detail.mythicUnavailable;
 
   const groups: { label: "Unlocked" | "Locked" | null; items: Achievement[] }[] = grouped
@@ -636,31 +757,45 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
           animation: none !important;
         }
         :is(.nexus-achievement-row-focused, .nexus-achievement-row:focus-within,
-          .nexus-achievement-row:has(.nexus-secret-reveal:is(.gpfocus, :focus, :active))) {
+          .nexus-achievement-row:has(:is(.nexus-secret-reveal, .nexus-ta-action):is(.gpfocus, :focus, :active))) {
           background: #fff;
           color: #0e141b;
           opacity: 1 !important;
           border-radius: 10px;
         }
         :is(.nexus-achievement-row-focused, .nexus-achievement-row:focus-within,
-          .nexus-achievement-row:has(.nexus-secret-reveal:is(.gpfocus, :focus, :active))) .nexus-gamerscore-icon circle {
+          .nexus-achievement-row:has(:is(.nexus-secret-reveal, .nexus-ta-action):is(.gpfocus, :focus, :active))) .nexus-gamerscore-icon circle {
           fill: #0e141b !important;
         }
         :is(.nexus-achievement-row-focused, .nexus-achievement-row:focus-within,
-          .nexus-achievement-row:has(.nexus-secret-reveal:is(.gpfocus, :focus, :active))) .nexus-gamerscore-icon path {
+          .nexus-achievement-row:has(:is(.nexus-secret-reveal, .nexus-ta-action):is(.gpfocus, :focus, :active))) .nexus-gamerscore-icon path {
           stroke: #fff !important;
         }
-        .nexus-achievement-row .nexus-secret-reveal {
+        .nexus-row-action {
           background: #3d4450 !important;
           color: #fff !important;
+          border-radius: 4px;
+          transition: none !important;
         }
-        .nexus-achievement-row .nexus-secret-reveal:is(.gpfocus, :focus, :hover, :active) {
-          background: #fff !important;
+        .nexus-ta-missable { color: #ff6b6b !important; }
+        :where(.nexus-achievement-row-focused, .nexus-achievement-row:focus-within,
+          .nexus-achievement-row:has(.nexus-row-action:is(.gpfocus, :focus, :active))) .nexus-row-action {
+          background: #e5e8eb !important;
           color: #0e141b !important;
         }
-        .nexus-secret-reveal svg {
-          color: inherit;
-          fill: currentColor;
+        :where(.nexus-achievement-row-focused, .nexus-achievement-row:focus-within) .nexus-ta-missable {
+          color: #b42318 !important;
+        }
+        .nexus-achievement-row .nexus-row-action:is(.gpfocus, :focus, :hover, :active) {
+          background: #0e141b !important;
+          color: #fff !important;
+        }
+        .nexus-row-action svg { fill: currentColor; color: inherit; }
+        .nexus-filter-group > .nexus-filter-row {
+          margin-top: 0 !important;
+          margin-bottom: 0 !important;
+          border-top: 0 !important;
+          border-bottom: 0 !important;
         }
       `}</style>
 
@@ -668,13 +803,26 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
       <div style={{ opacity: 0.8, marginBottom: 8 }}>
         {t("{unlocked}/{total} unlocked", { unlocked: title.unlocked, total: title.total })} • <GamerscoreIcon /> {title.gamerscore}/{title.gamerscoreTotal}
       </div>
-      <DropdownItem label={t("Filter")} rgOptions={FILTERS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={filter}
-        onChange={o => updateView({ filter: o.data as Filter })} />
-      <DropdownItem label={t("Achievement set")} rgOptions={ACHIEVEMENT_SETS.map(option => ({ ...option, label: t(option.label as Message) }))}
-        selectedOption={contentFilter} onChange={option => updateView({ contentFilter: option.data as AchievementSet })} />
-      <Field label={t("Sort by")} childrenContainerWidth="min" verticalAlignment="center">
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-
+      <TAAccount gameTitleId={title.titleId} />
+      {ta?.status === "unavailable" && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("TA flags unavailable. You can still open TrueAchievements.")}</div>}
+      {ta?.status === "stale" && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("Showing cached TA flags.")}</div>}
+      <section className="nexus-filter-group" aria-label={t("Filters")}
+        style={{ margin: "12px 0", padding: 0, borderTop: "1px solid rgba(255,255,255,0.15)", borderBottom: "1px solid rgba(255,255,255,0.15)" }}>
+        <Field className="nexus-filter-row" bottomSeparator="none" label={t("Filter")} childrenContainerWidth="min" verticalAlignment="center">
+          <Dropdown rgOptions={FILTERS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={filter}
+            onChange={option => updateView({ filter: option.data as Filter })} />
+        </Field>
+        {availableFlags.length > 0 && <Field className="nexus-filter-row" bottomSeparator="none" label={t("TrueAchievements filter")} childrenContainerWidth="min" verticalAlignment="center">
+          <Dropdown rgOptions={[{ data: "all", label: t("All") }, ...availableFlags.map(flag => ({ data: `ta:${flag.id}`, label: t(flag.label as Message) }))]}
+            selectedOption={selectedTAFilter} onChange={option => updateView({ taFilter: option.data })} />
+        </Field>}
+        <Field className="nexus-filter-row" bottomSeparator="none" label={t("Achievement set")} childrenContainerWidth="min" verticalAlignment="center">
+          <Dropdown rgOptions={ACHIEVEMENT_SETS.map(option => ({ ...option, label: t(option.label as Message) }))}
+            selectedOption={contentFilter} onChange={option => updateView({ contentFilter: option.data as AchievementSet })} />
+        </Field>
+      </section>
+      <div className="nexus-sort-row" style={{ marginBottom: 8 }}><Field label={t("Sort by")} childrenContainerWidth="min" verticalAlignment="center">
+        <Focusable flow-children="row" className="nexus-sort-controls" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {(["asc", "desc"] as const).map(direction => <DialogButton key={direction}
           aria-label={t(direction === "asc" ? "Ascending" : "Descending")}
           aria-pressed={sortDirection === direction}
@@ -682,12 +830,12 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
             background: sortDirection === direction ? "#fff" : undefined,
             color: sortDirection === direction ? "#0e141b" : undefined }}
           onClick={() => updateView({ sortDirection: direction })}>{direction === "asc" ? "↑" : "↓"}</DialogButton>)}
-          <Dropdown rgOptions={SORTS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={sort}
-            onChange={o => updateView({ sort: o.data as Sort })} />
-        </div>
-      </Field>
+          <Dropdown rgOptions={SORTS.map(option => ({ ...option, label: t(option.label as Message) }))}
+            selectedOption={sort} onChange={option => updateView({ sort: option.data as Sort })} />
+        </Focusable>
+      </Field></div>
       {viewError && <div role="alert">{t(viewError)}</div>}
-      <AchievementLanguageSelector onChange={() => setLanguageRevision(value => value + 1)} />
+      <div className="nexus-control-row"><AchievementLanguageSelector onChange={() => setLanguageRevision(value => value + 1)} /></div>
       <ToggleField label={t("Group achievements")} description={t("Separate unlocked and locked achievements.")}
         checked={grouped} onChange={async enabled => {
           setGroupError(false);
@@ -711,7 +859,8 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
         {groups.filter(group => group.items.length > 0).map(group => <div key={group.label || "all"}>
           {group.label && <h3 style={{ margin: "12px 0 8px" }}>{t(group.label)} ({group.items.length})</h3>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {group.items.map(a => <AchievementRow key={a.id || a.name} a={a} reveal={isRevealed(a)}
+            {group.items.map(a => <AchievementRow key={a.id || a.name} a={a} ta={ta?.achievements[a.id]} reveal={isRevealed(a)}
+              onFlag={flag => updateView({ taFilter: `ta:${flag}` })}
               onToggle={() => setOverrides(o => ({ ...o, [a.id]: !isRevealed(a) }))} />)}
           </div>
         </div>)}
@@ -970,6 +1119,7 @@ function Content() {
           {t("View all achievements")}
         </ButtonItem>
       </PanelSectionRow>
+      <PanelSectionRow><TAAccount /></PanelSectionRow>
       <PanelSectionRow>
         <ToggleField label={t("Enable notifications")} checked={settings.enabled}
           onChange={enabled => update({ enabled })} />

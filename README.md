@@ -32,7 +32,7 @@ Malformed lines and other `type` values are ignored. The plugin starts at the en
 
 1. Install [Decky Loader](https://decky.xyz) on the Deck.
 2. Build: `npm install && npm run build`.
-3. Copy this folder (with `dist/`, `main.py`, `achievement_language.py`, `mythic.py`, `steam_menu.py`, `plugin.json`, `package.json`, `LICENSE`) to `~/homebrew/plugins/decky-nexus-achievements/` (needs root to write). When extracting an archive, use `sudo tar --no-same-owner` and then `sudo chown -R root:root ~/homebrew/plugins/decky-nexus-achievements` to avoid importing a macOS UID. Keep backups outside `~/homebrew/plugins/`. Restart Decky: `sudo systemctl restart plugin_loader`.
+3. Copy this folder (with `dist/`, `main.py`, `achievement_language.py`, `mythic.py`, `steam_menu.py`, `trueachievements.py`, `ta_session.py`, `ta_bridge.py`, `ta_worker.py`, `ta_flags.json`, `plugin.json`, `package.json`, `LICENSE`) to `~/homebrew/plugins/decky-nexus-achievements/` (needs root to write). When extracting an archive, use `sudo tar --no-same-owner` and then `sudo chown -R root:root ~/homebrew/plugins/decky-nexus-achievements` to avoid importing a macOS UID. Keep backups outside `~/homebrew/plugins/`. Restart Decky: `sudo systemctl restart plugin_loader`.
 4. Open the Quick Access menu (`...`), then Nexus Achievements, then "Send test notification".
 
 ## Achievements viewer
@@ -204,3 +204,50 @@ Mythic progress loads in the background at plugin startup for all saved games, t
 The initial local game view includes preloaded Mythic progress, Original/Add-on membership, and selected-language text. The startup scan also warms localized notification text; changing achievement language requests a new background scan.
 
 Achievement sorting supports name, Gamerscore, unlock date, and Xbox unlock percentage (rarity). Use the up/down arrows beside Sort by for ascending/descending order. Ascending rarity puts the rarest achievements first; unavailable rarity stays last in both directions. Sort direction is saved per game when preference saving is enabled.
+
+### TrueAchievements
+
+Achievement rows show localized TA flag badges and an emblem button linking to
+achievement guides. The plugin decodes TA's flag bitmasks, requests English names
+from Xbox, and matches them to displayed rows by stable achievement ID. Changing
+the display language does not change the flags. Ambiguous or unmatched names receive
+no inferred flags; absence of a badge does not confirm an achievement is unmissable.
+
+A separate **TrueAchievements filter** lists only flag types present in the game
+and combines with unlock-state and achievement-set filters. Clicking a badge applies
+its flag filter. Selections persist per game; previous TA filter preferences migrate
+to the separate field. Filter rows share a flat group with no internal gaps or
+separators. Sorting and direction arrows share a row, with language on its own row.
+
+Left/right moves between badges; up/down moves within the TA guide/reveal button
+column. X toggles a locked secret achievement, and RB opens the focused row's guide.
+Holding either shortcut does not repeat its action. Secret text, badges, and guide
+buttons stay hidden until revealed; RB explicitly opens a guide even on a hidden row.
+Missable badges are red, and all row buttons share readable focus colors. The
+status-bar Gamerscore also supports native header D-pad navigation; A opens achievements.
+
+Successful TA metadata is cached in the plugin settings directory for 24 hours.
+Failed requests back off for 15 minutes and preserve cached flags with a notice.
+TA may block automated requests (HTTP 403); a saved session does not guarantee access,
+and browser links remain available when flags cannot be loaded.
+
+#### Signing in to TA
+
+Choose **Sign in to TrueAchievements** in plugin settings or the game view, then
+use TA's sign-in control in the Steam browser. Complete sign-in and leave the TA page
+open. Return to the plugin and choose **Connect browser session**. The plugin checks
+for a signed-in TA page through Steam's local browser debugging interface and copies
+only cookies scoped to TrueAchievements. If the Steam build does not expose the page,
+it reports that the session cannot be connected. No TA login is required for public
+metadata, but a session can be connected for authenticated requests.
+
+The plugin never receives your password or Microsoft cookies. TA session credentials
+stay in `trueachievements/session.json` under the plugin settings directory with
+owner-only permissions (0600); frontend settings and logs never contain those cookies.
+**Disconnect TA session** deletes the plugin's copy and leaves the browser signed in.
+TA controls cookie expiry; reconnect after expiry.
+
+TA processing runs in an isolated worker using `/usr/bin/python3` on Steam Deck,
+avoiding standard-library modules absent from Decky's frozen Python. Browser session
+connection requires `aiohttp` in the system Python environment. Optional TA failures
+cannot prevent the core plugin from loading.

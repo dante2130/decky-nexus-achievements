@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 # Decky loads main.py by filename without adding the plugin directory to sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from achievement_language import LANGUAGES, translate_title, backend_command, run_bounded
+from ta_bridge import TAWorker
 from mythic import MythicTracker
 from steam_menu import shortcut_game
 
@@ -103,6 +104,21 @@ def _num(value: Any, default: int = 0) -> int:
 
 def _str(value: Any) -> str:
     return value if isinstance(value, str) else ""
+
+
+def valid_achievement_filter(value):
+    if value in ("all", "unlocked", "locked"):
+        return True
+    if not isinstance(value, str) or not value.startswith("ta:"):
+        return False
+    try:
+        catalog = Path(__file__).with_name("ta_flags.json")
+        if not catalog.exists():
+            catalog = Path(__file__).parent / "src/ta_flags.json"
+        flags = json.loads(catalog.read_text())
+        return value[3:] in {flag["id"] for flag in flags}
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def valid_title_id(title_id: Any) -> bool:
@@ -363,22 +379,31 @@ class Plugin:
         value = games.get(title_id, {}) if isinstance(games, dict) else {}
         if not isinstance(value, dict):
             value = {}
+        legacy = value.get("filter")
+        ta_filter = value.get("taFilter", legacy if isinstance(legacy, str) and legacy.startswith("ta:") else "all")
         return {
-            "filter": value.get("filter") if value.get("filter") in ("all", "unlocked", "locked") else "all",
+            **({"taFilter": ta_filter} if ta_filter != "all" and valid_achievement_filter(ta_filter) else {}),
+            "filter": legacy if legacy in ("all", "unlocked", "locked") else "all",
             "sort": value.get("sort") if value.get("sort") in ("name", "gamerscore", "date", "rarity") else "date",
             "sortDirection": value.get("sortDirection") if value.get("sortDirection") in ("asc", "desc") else ("asc" if value.get("sort") == "name" else "desc"),
             "contentFilter": value.get("contentFilter") if value.get("contentFilter") in ("all", "original", "addon") else "all",
         }
 
-    async def set_game_view_settings(self, title_id: str, filter_value: str, sort_value: str, content_filter: str = "all", sort_direction: str = "") -> Dict[str, str]:
+    async def set_game_view_settings(self, title_id: str, filter_value: str, sort_value: str, content_filter: str = "all", sort_direction: str = "", ta_filter: str = "all") -> Dict[str, str]:
         if not valid_title_id(title_id):
             raise ValueError("Invalid title ID.")
         if not sort_direction:
             sort_direction = "asc" if sort_value == "name" else "desc"
-        if (filter_value not in ("all", "unlocked", "locked") or sort_value not in ("name", "gamerscore", "date", "rarity")
+        if isinstance(filter_value, str) and filter_value.startswith("ta:"):
+            if ta_filter == "all":
+                ta_filter = filter_value
+            filter_value = "all"
+        if (not valid_achievement_filter(ta_filter) or ta_filter in ("locked", "unlocked")
+                or filter_value not in ("all", "locked", "unlocked") or sort_value not in ("name", "gamerscore", "date", "rarity")
                 or content_filter not in ("all", "original", "addon") or sort_direction not in ("asc", "desc")):
             raise ValueError("Invalid game view settings.")
-        value = {"filter": filter_value, "sort": sort_value, "contentFilter": content_filter, "sortDirection": sort_direction}
+        value = {"filter": filter_value, "sort": sort_value, "contentFilter": content_filter, "sortDirection": sort_direction,
+                 **({"taFilter": ta_filter} if ta_filter != "all" else {})}
         if not self.settings.get("remember_game_view_settings", True):
             return value
         previous = self.settings
@@ -454,6 +479,47 @@ class Plugin:
         metadata = getattr(self, "_achievement_metadata", {}).get(title_id, {})
         return {**detail, **({"mythic": group} if group else {}), "achievements": [
             {**item, **metadata.get(item["id"], {})} for item in detail.get("achievements", [])]}
+
+    async def _ta_call(self, action: str, detail=None) -> Dict[str, Any]:
+        if not hasattr(self, "_ta_worker"):
+            self._ta_worker = TAWorker(self._settings_file().parent / "trueachievements")
+        try:
+            return await self._ta_worker.call(action, detail)
+        except Exception:
+            if action == "metadata":
+                return {"status": "unavailable", "achievements": {}}
+            return {"status": "disconnected", "error": "verification_failed"}
+
+    async def get_ta_session(self) -> Dict[str, Any]:
+        return await self._ta_call("status")
+
+    async def connect_ta_session(self) -> Dict[str, Any]:
+        return await self._ta_call("connect")
+
+    async def disconnect_ta_session(self) -> Dict[str, Any]:
+        return await self._ta_call("disconnect")
+
+    async def get_trueachievements(self, title_id: str) -> Dict[str, Any]:
+        detail = get_title(title_id)
+        if not detail.get("ok"):
+            return {"status": "unavailable", "achievements": {}}
+        # TA uses English names. Keep these separate from the displayed language.
+        if not hasattr(self, "_ta_english"):
+            self._ta_english = {}
+        names = self._ta_english.get(title_id, {})
+        if any(item["id"] not in names for item in detail.get("achievements", [])):
+            try:
+                english = await translate_title(user_home(), detail, "en-US")
+                names = {item["id"]: item["name"] for item in english.get("achievements", [])}
+                if len(self._ta_english) >= MAX_TITLES:
+                    self._ta_english.pop(next(iter(self._ta_english)))
+                self._ta_english[title_id] = names
+            except Exception:
+                # Exact matching can still use an English original snapshot.
+                pass
+        matching = {**detail, "achievements": [
+            {**item, "name": names.get(item["id"], item["name"])} for item in detail.get("achievements", [])]}
+        return await self._ta_call("metadata", matching)
 
     async def get_saved_title_achievements(self, title_id: str) -> Dict[str, Any]:
         language = self.settings.get("achievement_language", "")
@@ -753,6 +819,8 @@ class Plugin:
         self._mythic_library_task = asyncio.create_task(self._watch_mythic_library())
 
     async def _unload(self):
+        if getattr(self, "_ta_worker", None):
+            await self._ta_worker.close()
         if self.task:
             self.task.cancel()
         jobs = list(getattr(self, "_mythic_jobs", {}).values())

@@ -48,3 +48,33 @@ test('only the normal Gamepad header is patched, not Frame or VR headers', () =>
   assert.equal(patched.includes(frameHeader), false);
   cleanup();
 });
+
+test('status portal captures target header navigation and window contexts', () => {
+  const { output } = fixture();
+  const outerProvider = {};
+  const parentProvider = {};
+  const navigation = { m_Tree: {}, m_rgChildren: [] };
+  const ownerWindow = { ownerWindow: {} };
+  const header = { '__reactFiber$fixture': { tag: 5, return: {
+    tag: 10, type: { _context: { Provider: parentProvider } }, memoizedProps: { value: navigation }, return: {
+      tag: 10, type: { Provider: outerProvider }, memoizedProps: { value: ownerWindow }, return: null,
+    },
+  } } };
+  const providers = output.headerNavigationProviders(header);
+  assert.equal(providers.length, 2);
+  assert.equal(providers[0].type, parentProvider);
+  assert.equal(providers[0].value, navigation);
+  assert.equal(providers[1].value, ownerWindow);
+  assert.equal(output.headerNavigationProviders({}).length, 0);
+});
+test('native status score exposes gamepad activation and action description', async () => {
+  const { output } = fixture();
+  output.setProfileGamerscoreEnabled(true);
+  await new Promise(resolve => setImmediate(resolve));
+  let opened = 0;
+  const native = output.ProfileScoreForTest({ icon: 'G', onOpen() { opened++; } });
+  native.props.onActivate();
+  assert.equal(opened, 1);
+  assert.equal(native.props.onOKActionDescription, 'View all achievements');
+  output.setProfileGamerscoreEnabled(false);
+});

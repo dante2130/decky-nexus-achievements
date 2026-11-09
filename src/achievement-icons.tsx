@@ -1,4 +1,7 @@
 import { useId } from "react";
+// TrueAchievements emblem: https://www.trueachievements.com/images-svg/ta-emblem.svg
+// Monochrome paths inherit row and focus colors.
+import taSvg from "./assets/ta.svg?inline";
 import rareSvg from "./assets/rare.svg?inline";
 import mythicSvg from "./assets/mythic.svg?inline";
 
@@ -14,3 +17,5 @@ function VectorIcon({ source, size }: { source: string; size: number }) {
 }
 export function RareIcon({ size = 16 }: { size?: number }) { return <VectorIcon source={rareSvg} size={size} />; }
 export function MythicIcon({ size = 16 }: { size?: number }) { return <VectorIcon source={mythicSvg} size={size} />; }
+
+export function TAIcon({ size = 16 }: { size?: number }) { return <VectorIcon source={taSvg} size={size} />; }

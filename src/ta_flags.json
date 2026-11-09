@@ -1,0 +1,157 @@
+[
+  {
+    "id": "online",
+    "label": "Online Game Mode",
+    "bit": 31
+  },
+  {
+    "id": "offline",
+    "label": "Offline Game Mode",
+    "bit": 30
+  },
+  {
+    "id": "online-offline",
+    "label": "Online/Offline",
+    "bit": 29
+  },
+  {
+    "id": "single-player",
+    "label": "Single Player",
+    "bit": 28
+  },
+  {
+    "id": "main-storyline",
+    "label": "Main Storyline",
+    "bit": 27
+  },
+  {
+    "id": "difficulty-specific",
+    "label": "Difficulty Specific",
+    "bit": 26
+  },
+  {
+    "id": "stackable",
+    "label": "Stackable",
+    "bit": 25
+  },
+  {
+    "id": "collectable",
+    "label": "Collectable",
+    "bit": 24
+  },
+  {
+    "id": "cumulative-plus",
+    "label": "Cumulative +",
+    "bit": 23
+  },
+  {
+    "id": "viral",
+    "label": "Viral",
+    "bit": 22
+  },
+  {
+    "id": "online-skill",
+    "label": "Online Skill",
+    "bit": 21
+  },
+  {
+    "id": "time-consuming",
+    "label": "Time Consuming",
+    "bit": 20
+  },
+  {
+    "id": "missable",
+    "label": "Missable",
+    "bit": 19
+  },
+  {
+    "id": "buggy-minus",
+    "label": "Buggy -",
+    "bit": 18
+  },
+  {
+    "id": "unobtainable",
+    "label": "Unobtainable",
+    "bit": 17
+  },
+  {
+    "id": "discontinued",
+    "label": "Discontinued",
+    "bit": 16
+  },
+  {
+    "id": "shop",
+    "label": "Shop",
+    "bit": 15
+  },
+  {
+    "id": "buggy-plus",
+    "label": "Buggy +",
+    "bit": 14
+  },
+  {
+    "id": "level",
+    "label": "Level",
+    "bit": 13
+  },
+  {
+    "id": "community",
+    "label": "Community",
+    "bit": 12
+  },
+  {
+    "id": "partly-discontinued-unobtainable",
+    "label": "Partly Discontinued/Unobtainable",
+    "bit": 11
+  },
+  {
+    "id": "multiple-playthroughs",
+    "label": "Multiple Playthroughs Required",
+    "bit": 10
+  },
+  {
+    "id": "cumulative-minus",
+    "label": "Cumulative -",
+    "bit": 9
+  },
+  {
+    "id": "cooperative",
+    "label": "Cooperative",
+    "bit": 8
+  },
+  {
+    "id": "versus",
+    "label": "Versus",
+    "bit": 7
+  },
+  {
+    "id": "host-only",
+    "label": "Host Only",
+    "bit": 6
+  },
+  {
+    "id": "external-content",
+    "label": "External Content",
+    "bit": 5
+  },
+  {
+    "id": "time-date",
+    "label": "Time/Date",
+    "bit": 4
+  },
+  {
+    "id": "players-required",
+    "label": "Players Required",
+    "bit": 3
+  },
+  {
+    "id": "platinum",
+    "label": "Platinum",
+    "bit": 2
+  },
+  {
+    "id": "story-completed",
+    "label": "Story Completed",
+    "bit": 1
+  }
+]

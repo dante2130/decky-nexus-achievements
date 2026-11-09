@@ -1,6 +1,6 @@
 import { callable, routerHook } from "@decky/api";
 import { afterPatch, findModule, findClassModule, Focusable } from "@decky/ui";
-import { cloneElement, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createElement, cloneElement, useEffect, useState, useSyncExternalStore, type ReactNode, type ElementType } from "react";
 import { getPluginLanguage, pluginLocales, subscribeLanguage, translate } from "./i18n";
 
 interface ScoreState { enabled: boolean; score: number | null; unavailable: boolean; }
@@ -65,19 +65,17 @@ function ProfileScore({ icon, onOpen, iconOnly = false, nativeNavigation = true 
     <style>{`
       .${headerButtonClasses?.InQuickAccess} .nexus-profile-score-value { display: none !important; }
       .nexus-profile-controller-focus,
-      .nexus-profile-gamerscore:is(.gpfocus, :focus, :focus-visible):not(:hover) {
-        background: transparent !important;
-        color: inherit !important;
+      .nexus-profile-gamerscore:is(.gpfocus, :focus-visible) {
+        background: #fff !important;
+        color: #0e141b !important;
         box-shadow: none !important;
         outline: none !important;
       }
-      .nexus-profile-controller-focus::before,
-      .nexus-profile-controller-focus::after,
-      .nexus-profile-gamerscore:is(.gpfocus, :focus, :focus-visible):not(:hover)::before,
-      .nexus-profile-gamerscore:is(.gpfocus, :focus, :focus-visible):not(:hover)::after {
-        background: transparent !important;
-        box-shadow: none !important;
-        opacity: 0 !important;
+      :is(.nexus-profile-controller-focus, .nexus-profile-gamerscore.gpfocus) .nexus-gamerscore-icon circle {
+        fill: #0e141b !important;
+      }
+      :is(.nexus-profile-controller-focus, .nexus-profile-gamerscore.gpfocus) .nexus-gamerscore-icon path {
+        stroke: #fff !important;
       }
     `}</style>
     {icon}{!iconOnly && <span className="nexus-profile-score-value">{score}</span>}
@@ -92,14 +90,35 @@ function ProfileScore({ icon, onOpen, iconOnly = false, nativeNavigation = true 
   return <Focusable noFocusRing className={className} role="button" data-nexus-profile-score="true"
     onGamepadFocus={() => setControllerFocus(true)} onGamepadBlur={() => setControllerFocus(false)}
     onMouseEnter={() => setControllerFocus(false)} onMouseMove={() => setControllerFocus(false)}
-    onActivate={onOpen} onClick={onOpen} aria-label={translate(locale, "Profile Gamerscore: {score}", { score })} style={style}>
+    onOKActionDescription={translate(locale, "View all achievements")} onActivate={onOpen} onClick={onOpen} aria-label={translate(locale, "Profile Gamerscore: {score}", { score })} style={style}>
     {content}
   </Focusable>;
+}
+
+interface HeaderProvider { type: ElementType; value: unknown; }
+// A portal keeps its original React contexts. Replay the target header's providers
+// so native navigation registers in that window's header tree, not SharedJSContext.
+export function headerNavigationProviders(header: HTMLElement): HeaderProvider[] {
+  const fiberKey = Object.keys(header).find(key => key.startsWith("__reactFiber$"));
+  let fiber = fiberKey ? (header as any)[fiberKey] : null;
+  const providers: HeaderProvider[] = [];
+  let foundNavigation = false;
+  for (let depth = 0; fiber && depth < 100; depth++, fiber = fiber.return) {
+    if (fiber.tag !== 10) continue;
+    const context = fiber.type?._context ?? fiber.type;
+    const type = context?.Provider;
+    if (!type) continue;
+    const value = fiber.memoizedProps?.value;
+    if (value?.m_Tree && Array.isArray(value?.m_rgChildren)) foundNavigation = true;
+    providers.push({ type, value });
+  }
+  return foundNavigation ? providers : [];
 }
 
 function ExistingHeaderScore({ icon, onOpen }: { icon: ReactNode; onOpen: () => void }) {
   const value = useProfileGamerscore();
   const [host, setHost] = useState<HTMLElement | null>(null);
+  const [providers, setProviders] = useState<HeaderProvider[]>([]);
   useEffect(() => {
     if (!value.enabled) return;
     let node: HTMLElement | null = null;
@@ -123,6 +142,9 @@ function ExistingHeaderScore({ icon, onOpen }: { icon: ReactNode; onOpen: () => 
         if (node) { node.remove(); node = null; setHost(null); }
         return;
       }
+      const nextProviders = headerNavigationProviders(header);
+      setProviders(previous => previous.length === nextProviders.length && previous.every((provider, index) =>
+        provider.type === nextProviders[index].type && provider.value === nextProviders[index].value) ? previous : nextProviders);
       if (node?.parentElement === header) return;
       node?.remove();
       node = doc.createElement("div");
@@ -138,7 +160,10 @@ function ExistingHeaderScore({ icon, onOpen }: { icon: ReactNode; onOpen: () => 
   }, [value.enabled]);
   if (!host || !value.enabled) return null;
   const dom = (window as any).SP_REACTDOM;
-  return dom.createPortal(<ProfileScore icon={icon} onOpen={onOpen} nativeNavigation={false} />, host);
+  let content: ReactNode = <ProfileScore icon={icon} onOpen={onOpen} nativeNavigation={providers.length > 0} />;
+  // Walk from the closest provider outwards, matching the target header ancestry.
+  for (const provider of providers) content = createElement(provider.type, { value: provider.value }, content);
+  return dom.createPortal(content, host);
 }
 
 export function installProfileGamerscore(icon: ReactNode, onOpen: () => void): () => void {

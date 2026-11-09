@@ -33,3 +33,9 @@ test('multiple vector badges have isolated gradient IDs and valid references', (
   assert.equal(output.MythicIcon({}).props.viewBox, '0 0 128 128');
   for (const match of markup.matchAll(/url\(#([^)]+)\)/g)) assert.ok(ids.includes(match[1]));
 });
+
+test('TA emblem inherits focus color without a solid background disc', () => {
+  const markup = output.TAIcon({}).props.dangerouslySetInnerHTML.__html;
+  assert.match(markup, /fill="currentColor"/);
+  assert.doesNotMatch(markup, /<circle|fill="#/);
+});
