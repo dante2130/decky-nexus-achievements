@@ -169,6 +169,7 @@
   "Sort order": "Порядок сортировки",
   "Filters": "Фильтры",
   "Favorites": "Избранное",
+  "Pinned achievements": "Закреплённые достижения",
   "Other achievements": "Другие достижения",
   "Add to favorites": "Добавить в избранное",
   "Remove from favorites": "Удалить из избранного",
@@ -198,5 +199,12 @@
   "Tracker hidden. Could not save this preference.": "Трекер скрыт. Не удалось сохранить настройку.",
   "Unlocked achievements cannot be favorited.": "Нельзя добавить в избранное уже полученное достижение.",
   "Middle left": "По центру слева",
-  "Middle right": "По центру справа"
+  "Middle right": "По центру справа",
+  "TrueAchievements": "TrueAchievements",
+  "Filters and sorting": "Фильтры и сортировка",
+  "Achievement display": "Отображение достижений",
+  "Achievements": "Достижения",
+  "Steam integration": "Интеграция со Steam",
+  "Notifications": "Уведомления",
+  "Notification sounds and testing": "Звуки и тестирование уведомлений"
 }

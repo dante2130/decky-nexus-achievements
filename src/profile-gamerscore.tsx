@@ -63,6 +63,12 @@ function ProfileScore({ icon, onOpen, iconOnly = false, nativeNavigation = true 
     height: "100%", alignSelf: "stretch", boxSizing: "border-box" as const, borderRadius: 0, color: "inherit" };
   const content = <>
     <style>{`
+      .nexus-profile-score-value {
+        font-family: "Motiva Sans", Helvetica, sans-serif;
+        font-size: 16px;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
       .${headerButtonClasses?.InQuickAccess} .nexus-profile-score-value { display: none !important; }
       .nexus-profile-controller-focus,
       .nexus-profile-gamerscore:is(.gpfocus, :focus-visible) {
@@ -96,8 +102,8 @@ function ProfileScore({ icon, onOpen, iconOnly = false, nativeNavigation = true 
 }
 
 interface HeaderProvider { type: ElementType; value: unknown; }
-// A portal keeps its original React contexts. Replay the target header's providers
-// so native navigation registers in that window's header tree, not SharedJSContext.
+// A portal keeps its original React contexts. Replay the destination providers
+// so native navigation registers in the destination focus tree.
 export function headerNavigationProviders(header: HTMLElement): HeaderProvider[] {
   const fiberKey = Object.keys(header).find(key => key.startsWith("__reactFiber$"));
   let fiber = fiberKey ? (header as any)[fiberKey] : null;

@@ -169,6 +169,7 @@
   "Sort order": "Порядок сортування",
   "Filters": "Фільтри",
   "Favorites": "Обране",
+  "Pinned achievements": "Закріплені досягнення",
   "Other achievements": "Інші досягнення",
   "Add to favorites": "Додати до обраного",
   "Remove from favorites": "Вилучити з обраного",
@@ -198,5 +199,12 @@
   "Tracker hidden. Could not save this preference.": "Трекер приховано. Не вдалося зберегти налаштування.",
   "Unlocked achievements cannot be favorited.": "Не можна додати до обраного вже отримане досягнення.",
   "Middle left": "Посередині ліворуч",
-  "Middle right": "Посередині праворуч"
+  "Middle right": "Посередині праворуч",
+  "TrueAchievements": "TrueAchievements",
+  "Filters and sorting": "Фільтри й сортування",
+  "Achievement display": "Відображення досягнень",
+  "Achievements": "Досягнення",
+  "Steam integration": "Інтеграція зі Steam",
+  "Notifications": "Сповіщення",
+  "Notification sounds and testing": "Звуки й тестування сповіщень"
 }

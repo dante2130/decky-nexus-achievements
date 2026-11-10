@@ -169,6 +169,7 @@
   "Sort order": "Sort order",
   "Filters": "Filters",
   "Favorites": "Favorites",
+  "Pinned achievements": "Pinned achievements",
   "Other achievements": "Other achievements",
   "Add to favorites": "Add to favorites",
   "Remove from favorites": "Remove from favorites",
@@ -198,5 +199,12 @@
   "Tracker hidden. Could not save this preference.": "Tracker hidden. Could not save this preference.",
   "Unlocked achievements cannot be favorited.": "Unlocked achievements cannot be favorited.",
   "Middle left": "Middle left",
-  "Middle right": "Middle right"
+  "Middle right": "Middle right",
+  "TrueAchievements": "TrueAchievements",
+  "Filters and sorting": "Filters and sorting",
+  "Achievement display": "Achievement display",
+  "Achievements": "Achievements",
+  "Steam integration": "Steam integration",
+  "Notifications": "Notifications",
+  "Notification sounds and testing": "Notification sounds and testing"
 }
