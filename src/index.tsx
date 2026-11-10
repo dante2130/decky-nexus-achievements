@@ -9,6 +9,8 @@ import {
   Field,
   Focusable,
   GamepadButton,
+  gamepadDialogClasses,
+  gamepadSliderClasses,
   Navigation,
   NavEntryPositionPreferences,
   PanelSection,
@@ -19,7 +21,7 @@ import {
   staticClasses,
 } from "@decky/ui";
 import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster, openFilePicker, FileSelectionType } from "@decky/api";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { FaEye, FaEyeSlash, FaPlay, FaTrophy, FaSignInAlt, FaLink, FaUnlink, FaExternalLinkAlt, FaSpinner, FaStar, FaRegStar, FaThumbtack } from "react-icons/fa";
 import { fitNotificationPopup } from "./notification-popup";
 import { NotificationAudio, observePopupSound, shouldSuppressNexusSound, type PopupPlayback, type SoundFiles } from "./notification-audio";
@@ -666,6 +668,46 @@ function AchievementRow({ a, ta, reveal, onToggle, onFlag, favorite = false, tra
     focusClassName="nexus-achievement-row-focused" style={style}>{content}</Focusable>;
 }
 
+function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
+  return <section className="nexus-settings-group" aria-label={title}>
+    <h3>{title}</h3>
+    <div className="nexus-settings-rows">{children}</div>
+  </section>;
+}
+
+function SettingsGroupStyles() {
+  const field = gamepadDialogClasses?.Field ?? "nexus-native-field";
+  const control = gamepadDialogClasses?.FieldChildrenWithIcon;
+  const slider = gamepadSliderClasses?.SliderControl;
+  return <style>{`
+    .nexus-settings-group { margin: 28px 0 0; }
+    .nexus-settings-group > h3 { margin: 0 0 8px; font-size: 16px; font-weight: 500; color: #dcdedf; }
+    .nexus-settings-rows { display: flex; flex-direction: column; gap: 6px; }
+    .nexus-settings-rows > * { margin-block: 0; min-width: 0; }
+    .nexus-settings-rows .${field} {
+      box-sizing: border-box;
+      width: 100%;
+      margin: 0 !important;
+      padding: 12px;
+      border: 0 !important;
+      border-radius: 2px;
+      background-color: #23262e;
+    }
+    .nexus-settings-rows .${field}:is(.gpfocus, .gpfocuswithin, :focus-within) {
+      background-color: #35383f;
+    }
+    .nexus-settings-rows .nexus-tracker-controls { gap: 6px !important; }
+    ${control && slider ? `
+      /* Steam's Quick Access minimum can exceed the padded settings row. */
+      .nexus-settings-rows .${field}:has(.${slider}) .${control} {
+        min-width: 0 !important;
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+    ` : ""}
+  `}</style>;
+}
+
 function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
   const preferences = useAchievementPreferences(title.titleId);
   const [selectionError, setSelectionError] = useState<string | null>(null);
@@ -777,12 +819,16 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
   }, [detail, filter, sort, sortDirection, query, reveal, overrides, contentFilter, ta, selectedTAFilter]);
   const membershipPending = contentFilter !== "all" && detail?.ok && !detail.mythic && !detail.mythicUnavailable;
 
-  const separated = splitFavoriteAchievements(rows, preferences.favorites);
+  const pinnedIds = new Set(preferences.tracked);
+  const pinned = rows.filter(item => !item.unlocked && pinnedIds.has(item.id));
+  const visiblePinnedIds = new Set(pinned.map(item => item.id));
+  const separated = splitFavoriteAchievements(rows.filter(item => !visiblePinnedIds.has(item.id)), preferences.favorites);
   const groups: { label: Message | null; items: Achievement[] }[] = [
+    ...(pinned.length ? [{ label: "Pinned achievements" as Message, items: pinned }] : []),
     ...(separated.favorites.length ? [{ label: "Favorites" as Message, items: separated.favorites }] : []),
     ...(grouped ? [{ label: "Unlocked" as Message, items: separated.others.filter(a => a.unlocked) },
       { label: "Locked" as Message, items: separated.others.filter(a => !a.unlocked) }]
-      : [{ label: separated.favorites.length ? "Other achievements" as Message : null, items: separated.others }]),
+      : [{ label: pinned.length || separated.favorites.length ? "Other achievements" as Message : null, items: separated.others }]),
   ];
 
   return (
@@ -833,70 +879,64 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
           color: #fff !important;
         }
         .nexus-row-action svg { fill: currentColor; color: inherit; }
-        .nexus-filter-group > .nexus-filter-row,
-        .nexus-tracker-row .nexus-tracker-option > :first-child {
-          border-radius: 0 !important;
-          width: 100%;
-          box-sizing: border-box;
-          margin-top: 0 !important;
-          margin-bottom: 0 !important;
-          border-top: 0 !important;
-          border-bottom: 0 !important;
-        }
       `}</style>
 
       <div style={{ display: "flex", alignItems: "center", gap: 16, margin: "8px 0" }}><GameCover url={title.coverUrl} mythic={detail?.mythic?.unlocked} /><h2>{title.titleName}</h2></div>
       <div style={{ opacity: 0.8, marginBottom: 8 }}>
         {t("{unlocked}/{total} unlocked", { unlocked: title.unlocked, total: title.total })} • <GamerscoreIcon /> {title.gamerscore}/{title.gamerscoreTotal}
       </div>
-      <TAAccount gameTitleId={title.titleId} />
-      {ta?.status === "unavailable" && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("TA flags unavailable. You can still open TrueAchievements.")}</div>}
-      {ta?.status === "stale" && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("Showing cached TA flags.")}</div>}
-      <section className="nexus-filter-group" aria-label={t("Filters")}
-        style={{ display: "flex", flexDirection: "column", gap: 8, margin: "12px 0", padding: 0 }}>
-        <Field className="nexus-filter-row" bottomSeparator="none" label={t("Filter")} childrenContainerWidth="min" verticalAlignment="center">
+      <SettingsGroupStyles />
+      <SettingsGroup title={t("TrueAchievements")}>
+        <TAAccount gameTitleId={title.titleId} />
+        {ta?.status === "unavailable" && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("TA flags unavailable. You can still open TrueAchievements.")}</div>}
+        {ta?.status === "stale" && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("Showing cached TA flags.")}</div>}
+      </SettingsGroup>
+      <SettingsGroup title={t("Filters and sorting")}>
+        <TextField label={t("Search")} value={query} onChange={e => setQuery(e.target.value)} />
+        <Field bottomSeparator="none" label={t("Filter")} childrenContainerWidth="min" verticalAlignment="center">
           <Dropdown rgOptions={FILTERS.map(option => ({ ...option, label: t(option.label as Message) }))} selectedOption={filter}
             onChange={option => updateView({ filter: option.data as Filter })} />
         </Field>
-        {availableFlags.length > 0 && <Field className="nexus-filter-row" bottomSeparator="none" label={t("TrueAchievements filter")} childrenContainerWidth="min" verticalAlignment="center">
+        {availableFlags.length > 0 && <Field bottomSeparator="none" label={t("TrueAchievements filter")} childrenContainerWidth="min" verticalAlignment="center">
           <Dropdown rgOptions={[{ data: "all", label: t("All") }, ...availableFlags.map(flag => ({ data: `ta:${flag.id}`, label: t(flag.label as Message) }))]}
             selectedOption={selectedTAFilter} onChange={option => updateView({ taFilter: option.data })} />
         </Field>}
-        <Field className="nexus-filter-row" bottomSeparator="none" label={t("Achievement set")} childrenContainerWidth="min" verticalAlignment="center">
+        <Field bottomSeparator="none" label={t("Achievement set")} childrenContainerWidth="min" verticalAlignment="center">
           <Dropdown rgOptions={ACHIEVEMENT_SETS.map(option => ({ ...option, label: t(option.label as Message) }))}
             selectedOption={contentFilter} onChange={option => updateView({ contentFilter: option.data as AchievementSet })} />
         </Field>
-      </section>
-      <div className="nexus-sort-row" style={{ marginBottom: 8 }}><Field label={t("Sort by")} childrenContainerWidth="min" verticalAlignment="center">
-        <Focusable flow-children="row" className="nexus-sort-controls" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {(["asc", "desc"] as const).map(direction => <DialogButton key={direction}
-          aria-label={t(direction === "asc" ? "Ascending" : "Descending")}
-          aria-pressed={sortDirection === direction}
-          style={{ width: 44, minWidth: 44, padding: 0, height: 40,
-            background: sortDirection === direction ? "#fff" : undefined,
-            color: sortDirection === direction ? "#0e141b" : undefined }}
-          onClick={() => updateView({ sortDirection: direction })}>{direction === "asc" ? "↑" : "↓"}</DialogButton>)}
-          <Dropdown rgOptions={SORTS.map(option => ({ ...option, label: t(option.label as Message) }))}
-            selectedOption={sort} onChange={option => updateView({ sort: option.data as Sort })} />
-        </Focusable>
-      </Field></div>
-      {viewError && <div role="alert">{t(viewError)}</div>}
-      <div className="nexus-language-row" style={{ marginBottom: 8 }}><AchievementLanguageSelector onChange={() => setLanguageRevision(value => value + 1)} /></div>
-      <div className="nexus-tracker-row" style={{ marginBottom: 8 }}><TrackerControls compact /></div>
+        <Field bottomSeparator="none" label={t("Sort by")} childrenContainerWidth="min" verticalAlignment="center">
+          <Focusable flow-children="row" className="nexus-sort-controls" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {(["asc", "desc"] as const).map(direction => <DialogButton key={direction}
+            aria-label={t(direction === "asc" ? "Ascending" : "Descending")}
+            aria-pressed={sortDirection === direction}
+            style={{ width: 44, minWidth: 44, padding: 0, height: 40,
+              background: sortDirection === direction ? "#fff" : undefined,
+              color: sortDirection === direction ? "#0e141b" : undefined }}
+            onClick={() => updateView({ sortDirection: direction })}>{direction === "asc" ? "↑" : "↓"}</DialogButton>)}
+            <Dropdown rgOptions={SORTS.map(option => ({ ...option, label: t(option.label as Message) }))}
+              selectedOption={sort} onChange={option => updateView({ sort: option.data as Sort })} />
+          </Focusable>
+        </Field>
+        {viewError && <div role="alert">{t(viewError)}</div>}
+      </SettingsGroup>
+      <SettingsGroup title={t("Achievement display")}>
+        <AchievementLanguageSelector onChange={() => setLanguageRevision(value => value + 1)} />
+        <ToggleField label={t("Group achievements")} description={t("Separate unlocked and locked achievements.")}
+          checked={grouped} onChange={async enabled => {
+            setGroupError(false);
+            try { setGrouped(await setGroupAchievements(enabled)); }
+            catch { setGroupError(true); }
+          }} />
+        {groupError && <div role="alert">{t("Could not save achievement grouping.")}</div>}
+        <ToggleField label={t("Show secret achievements")} description={t("Reveal names and descriptions of locked secret achievements.")}
+          checked={reveal} onChange={toggleReveal} />
+      </SettingsGroup>
+      <SettingsGroup title={t("Achievement tracker")}>
+        <TrackerControls compact />
+      </SettingsGroup>
       {selectionError && <div role="alert">{selectionError}</div>}
       {preferences.error && <div role="alert">{t("Could not load favorite and tracked achievements.")}</div>}
-      <ToggleField label={t("Group achievements")} description={t("Separate unlocked and locked achievements.")}
-        checked={grouped} onChange={async enabled => {
-          setGroupError(false);
-          try { setGrouped(await setGroupAchievements(enabled)); }
-          catch { setGroupError(true); }
-        }} />
-      {groupError && <div role="alert">{t("Could not save achievement grouping.")}</div>}
-      <ToggleField label={t("Show secret achievements")} description={t("Reveal names and descriptions of locked secret achievements.")}
-        checked={reveal} onChange={toggleReveal} />
-      <div style={{ marginTop: 12 }}>
-        <TextField label={t("Search")} value={query} onChange={e => setQuery(e.target.value)} />
-      </div>
       {detail?.ok && (detail.mythic || detail.mythicUnavailable) && <div style={{ marginTop: 12 }}><MythicProgress detail={detail}
         mythicOnly={contentFilter === "original"} onChange={enabled => updateView({ contentFilter: enabled ? "original" : "all" })} /></div>}
       {!detail && <div style={{ padding: 16 }}>{t("Loading…")}</div>}
@@ -1162,131 +1202,146 @@ function Content() {
 
   return (
     <PanelSection title={t("Nexus Achievements")}>
+      <SettingsGroupStyles />
       <PanelSectionRow><HideTrackerButton /></PanelSectionRow>
-      <PanelSectionRow>
-        <RunningGame flushCover onSelect={titleId => { requestedHideAllTitles = false; requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ButtonItem layout="below" onClick={() => { Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }}>
-          {t("View all achievements")}
-        </ButtonItem>
-      </PanelSectionRow>
-      <PanelSectionRow><TAAccount /></PanelSectionRow>
-      <PanelSectionRow><TrackerControls /></PanelSectionRow>
-      <PanelSectionRow>
-        <ToggleField label={t("Enable notifications")} checked={settings.enabled}
-          onChange={enabled => update({ enabled })} />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ToggleField label={t("Show Nexus Achievements in game menus")} description={t("Add a button to the running game menu and library page.")}
-          checked={settings.game_menu_button ?? true} onChange={async enabled => {
-            setGameMenuError(false);
-            try {
-              const saved = await saveGameMenuButton(enabled);
-              setGameMenuEnabled(saved);
-              setLocal(previous => previous ? { ...previous, game_menu_button: saved } : previous);
-            } catch { setGameMenuError(true); }
-          }} />
-        {gameMenuError && <div role="alert">{t("Could not save game menu preference.")}</div>}
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ToggleField label={t("Show profile Gamerscore in status bar")} description={t("Display your Xbox profile’s total Gamerscore in the SteamOS header.")}
-          checked={settings.profile_gamerscore ?? false} onChange={async enabled => {
-            setProfileScoreError(false);
-            try {
-              const saved = await saveProfileGamerscore(enabled);
-              setProfileGamerscoreEnabled(saved);
-              setLocal(previous => previous ? { ...previous, profile_gamerscore: saved } : previous);
-            } catch { setProfileScoreError(true); }
-          }} />
-        {profileScoreError && <div role="alert">{t("Could not save profile Gamerscore preference.")}</div>}
-        {profileScore.enabled && profileScore.unavailable && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("Profile Gamerscore unavailable. Check your Nexus sign-in and update the achievement backend.")}</div>}
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <AchievementLanguageSelector />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <SliderField layout="below" showValue={false} label={<DurationLabel label={t("Normal notification")} seconds={Math.max(soundMinimum("normal"), Math.round(settings.duration / 1000))} />} min={soundMinimum("normal")} max={soundMaximum("normal")} disabled={measuringSound("normal")} step={1}
-          value={Math.max(soundMinimum("normal"), Math.round(settings.duration / 1000))}
-          onChange={seconds => update({ duration: seconds * 1000 })} />
-      </PanelSectionRow>
-      {(["rare", "mythic"] as const).map(kind => <PanelSectionRow key={kind}>
-        <SliderField layout="below" showValue={false} label={<DurationLabel label={t(kind === "rare" ? "Rare notification" : "Mythic notification")} seconds={Math.max(soundMinimum(kind), Math.round((settings.notification_durations?.[kind] ?? settings.duration) / 1000))} />}
-          min={soundMinimum(kind)} max={soundMaximum(kind)} disabled={measuringSound(kind)} step={1}
-          value={Math.max(soundMinimum(kind), Math.round((settings.notification_durations?.[kind] ?? settings.duration) / 1000))}
-          onChange={async seconds => {
-            const duration = seconds * 1000;
-            notificationDurations = { ...notificationDurations, [kind]: duration };
-            setLocal(previous => previous ? { ...previous, notification_durations: { ...previous.notification_durations, [kind]: duration } } : previous);
-            setDurationError(false);
-            const saved = notificationDurationSaveQueue.then(() => setNotificationDuration(kind, duration));
-            notificationDurationSaveQueue = saved.then(() => undefined, () => undefined);
-            try { await saved; }
-            catch { setDurationError(true); }
-          }} />
-      </PanelSectionRow>)}
-      {durationError && <PanelSectionRow><div role="alert">{t("Could not save notification duration.")}</div></PanelSectionRow>}
-      <PanelSectionRow>
-        <DropdownItem label={t("Test notification type")} selectedOption={notificationKind}
-          rgOptions={notificationOptions}
-          onChange={async option => {
-            const kind = option.data as NotificationKind;
-            selectedNotificationKind = kind;
-            setNotificationKind(kind); setNotificationError(false);
-            const saved = notificationKindSaveQueue.then(() => saveTestNotificationType(kind));
-            notificationKindSaveQueue = saved.then(() => undefined, () => undefined);
-            try { await saved; }
+      <SettingsGroup title={t("Achievements")}>
+        <PanelSectionRow>
+          <RunningGame flushCover onSelect={titleId => { requestedHideAllTitles = false; requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => { Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }}>
+            {t("View all achievements")}
+          </ButtonItem>
+        </PanelSectionRow>
+      </SettingsGroup>
+      <SettingsGroup title={t("TrueAchievements")}>
+        <PanelSectionRow><TAAccount /></PanelSectionRow>
+      </SettingsGroup>
+      <SettingsGroup title={t("Achievement tracker")}>
+        <PanelSectionRow><TrackerControls /></PanelSectionRow>
+      </SettingsGroup>
+      <SettingsGroup title={t("Steam integration")}>
+        <PanelSectionRow>
+          <ToggleField label={t("Show Nexus Achievements in game menus")} description={t("Add a button to the running game menu and library page.")}
+            checked={settings.game_menu_button ?? true} onChange={async enabled => {
+              setGameMenuError(false);
+              try {
+                const saved = await saveGameMenuButton(enabled);
+                setGameMenuEnabled(saved);
+                setLocal(previous => previous ? { ...previous, game_menu_button: saved } : previous);
+              } catch { setGameMenuError(true); }
+            }} />
+          {gameMenuError && <div role="alert">{t("Could not save game menu preference.")}</div>}
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField label={t("Show profile Gamerscore in status bar")} description={t("Display your Xbox profile’s total Gamerscore in the SteamOS header.")}
+            checked={settings.profile_gamerscore ?? false} onChange={async enabled => {
+              setProfileScoreError(false);
+              try {
+                const saved = await saveProfileGamerscore(enabled);
+                setProfileGamerscoreEnabled(saved);
+                setLocal(previous => previous ? { ...previous, profile_gamerscore: saved } : previous);
+              } catch { setProfileScoreError(true); }
+            }} />
+          {profileScoreError && <div role="alert">{t("Could not save profile Gamerscore preference.")}</div>}
+          {profileScore.enabled && profileScore.unavailable && <div role="status" style={{ fontSize: 12, opacity: 0.7 }}>{t("Profile Gamerscore unavailable. Check your Nexus sign-in and update the achievement backend.")}</div>}
+        </PanelSectionRow>
+      </SettingsGroup>
+      <SettingsGroup title={t("Achievement display")}>
+        <PanelSectionRow>
+          <AchievementLanguageSelector />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField label={t("Remember game filters and sorting")} description={t("Save filter and sort choices separately for each game.")}
+            checked={settings.remember_game_view_settings ?? true}
+            onChange={async enabled => {
+              setRememberError(false);
+              try {
+                const saved = await setRememberGameViewSettings(enabled);
+                applyRememberGameView(saved);
+                setLocal(previous => previous ? { ...previous, remember_game_view_settings: saved } : previous);
+              } catch { setRememberError(true); }
+            }} />
+          {rememberError && <div role="alert">{t("Could not save the game settings preference.")}</div>}
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <PluginLanguageSelector />
+        </PanelSectionRow>
+      </SettingsGroup>
+      <SettingsGroup title={t("Notifications")}>
+        <PanelSectionRow>
+          <ToggleField label={t("Enable notifications")} checked={settings.enabled}
+            onChange={enabled => update({ enabled })} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <SliderField layout="below" showValue={false} label={<DurationLabel label={t("Normal notification")} seconds={Math.max(soundMinimum("normal"), Math.round(settings.duration / 1000))} />} min={soundMinimum("normal")} max={soundMaximum("normal")} disabled={measuringSound("normal")} step={1}
+            value={Math.max(soundMinimum("normal"), Math.round(settings.duration / 1000))}
+            onChange={seconds => update({ duration: seconds * 1000 })} />
+        </PanelSectionRow>
+        {(["rare", "mythic"] as const).map(kind => <PanelSectionRow key={kind}>
+          <SliderField layout="below" showValue={false} label={<DurationLabel label={t(kind === "rare" ? "Rare notification" : "Mythic notification")} seconds={Math.max(soundMinimum(kind), Math.round((settings.notification_durations?.[kind] ?? settings.duration) / 1000))} />}
+            min={soundMinimum(kind)} max={soundMaximum(kind)} disabled={measuringSound(kind)} step={1}
+            value={Math.max(soundMinimum(kind), Math.round((settings.notification_durations?.[kind] ?? settings.duration) / 1000))}
+            onChange={async seconds => {
+              const duration = seconds * 1000;
+              notificationDurations = { ...notificationDurations, [kind]: duration };
+              setLocal(previous => previous ? { ...previous, notification_durations: { ...previous.notification_durations, [kind]: duration } } : previous);
+              setDurationError(false);
+              const saved = notificationDurationSaveQueue.then(() => setNotificationDuration(kind, duration));
+              notificationDurationSaveQueue = saved.then(() => undefined, () => undefined);
+              try { await saved; }
+              catch { setDurationError(true); }
+            }} />
+        </PanelSectionRow>)}
+        {durationError && <PanelSectionRow><div role="alert">{t("Could not save notification duration.")}</div></PanelSectionRow>}
+      </SettingsGroup>
+      <SettingsGroup title={t("Notification sounds and testing")}>
+        <PanelSectionRow>
+          <DropdownItem label={t("Test notification type")} selectedOption={notificationKind}
+            rgOptions={notificationOptions}
+            onChange={async option => {
+              const kind = option.data as NotificationKind;
+              selectedNotificationKind = kind;
+              setNotificationKind(kind); setNotificationError(false);
+              const saved = notificationKindSaveQueue.then(() => saveTestNotificationType(kind));
+              notificationKindSaveQueue = saved.then(() => undefined, () => undefined);
+              try { await saved; }
+              catch { setNotificationError(true); }
+            }} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={soundBusy} description={soundPath?.split("/").pop() || t("Silent")}
+            onClick={async () => {
+              let file;
+              try { file = await openFilePicker(FileSelectionType.FILE, settings.sound_picker_path || "/home/deck", true, true, undefined, ["wav", "mp3", "ogg", "flac"]); }
+              catch { return; }
+              await saveSound(file.realpath || file.path);
+            }}>{t("Choose custom sound")}</ButtonItem>
+        </PanelSectionRow>
+        {soundPath && <PanelSectionRow>
+          <ButtonItem layout="below" disabled={soundBusy} onClick={async () => {
+            setSoundError(false);
+            try { await notificationAudio.play(notificationKind); }
+            catch { setSoundError(true); }
+          }}>{t("Preview custom sound")}</ButtonItem>
+          <ButtonItem layout="below" disabled={soundBusy} onClick={() => saveSound("")}>{t("Remove custom sound")}</ButtonItem>
+        </PanelSectionRow>}
+        {soundError && <PanelSectionRow><div role="alert">{t("Could not use this audio file. Choose a WAV, MP3, OGG, or FLAC file up to 5 MB.")}</div></PanelSectionRow>}
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={async () => {
+            setNotificationError(false);
+            try { await testNotification(getPluginLanguage(), notificationKind); }
             catch { setNotificationError(true); }
-          }} />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ButtonItem layout="below" disabled={soundBusy} description={soundPath?.split("/").pop() || t("Silent")}
-          onClick={async () => {
-            let file;
-            try { file = await openFilePicker(FileSelectionType.FILE, settings.sound_picker_path || "/home/deck", true, true, undefined, ["wav", "mp3", "ogg", "flac"]); }
-            catch { return; }
-            await saveSound(file.realpath || file.path);
-          }}>{t("Choose custom sound")}</ButtonItem>
-      </PanelSectionRow>
-      {soundPath && <PanelSectionRow>
-        <ButtonItem layout="below" disabled={soundBusy} onClick={async () => {
-          setSoundError(false);
-          try { await notificationAudio.play(notificationKind); }
-          catch { setSoundError(true); }
-        }}>{t("Preview custom sound")}</ButtonItem>
-        <ButtonItem layout="below" disabled={soundBusy} onClick={() => saveSound("")}>{t("Remove custom sound")}</ButtonItem>
-      </PanelSectionRow>}
-      {soundError && <PanelSectionRow><div role="alert">{t("Could not use this audio file. Choose a WAV, MP3, OGG, or FLAC file up to 5 MB.")}</div></PanelSectionRow>}
-      <PanelSectionRow>
-        <ButtonItem layout="below" onClick={async () => {
-          setNotificationError(false);
-          try { await testNotification(getPluginLanguage(), notificationKind); }
-          catch { setNotificationError(true); }
-        }}>
-          {t("Send test notification")}
-        </ButtonItem>
-        {notificationError && <div role="alert">{t("Could not send test notification.")}</div>}
-      </PanelSectionRow>
+          }}>
+            {t("Send test notification")}
+          </ButtonItem>
+          {notificationError && <div role="alert">{t("Could not send test notification.")}</div>}
+        </PanelSectionRow>
+      </SettingsGroup>
       <PanelSectionRow>
         <div style={{ fontSize: 11, opacity: 0.7, wordBreak: "break-all" }}>
           {t("Watching: {path}", { path: settings.resolved_path || "" })}
         </div>
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ToggleField label={t("Remember game filters and sorting")} description={t("Save filter and sort choices separately for each game.")}
-          checked={settings.remember_game_view_settings ?? true}
-          onChange={async enabled => {
-            setRememberError(false);
-            try {
-              const saved = await setRememberGameViewSettings(enabled);
-              applyRememberGameView(saved);
-              setLocal(previous => previous ? { ...previous, remember_game_view_settings: saved } : previous);
-            } catch { setRememberError(true); }
-          }} />
-        {rememberError && <div role="alert">{t("Could not save the game settings preference.")}</div>}
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <PluginLanguageSelector />
       </PanelSectionRow>
     </PanelSection>
   );

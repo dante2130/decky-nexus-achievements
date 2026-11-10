@@ -1,9 +1,10 @@
 import { addEventListener, removeEventListener, callable, routerHook } from "@decky/api";
-import { afterPatch, appDetailsClasses, appDetailsHeaderClasses, createReactTreePatcher, DialogButton, findInReactTree,
-  findModule, Focusable, injectFCTrampoline, mainMenuAppRunningClasses, type Patch } from "@decky/ui";
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { afterPatch, appDetailsClasses, appDetailsHeaderClasses, createReactTreePatcher, findInReactTree,
+  findModule, Focusable, GamepadButton, injectFCTrampoline, mainMenuAppRunningClasses, type Patch } from "@decky/ui";
+import { createElement, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { appendGameHeaderEntries } from "./game-header-entries";
 import { SessionCache } from "./cache";
+import { headerNavigationProviders } from "./profile-gamerscore";
 import { getPluginLanguage, subscribeLanguage, translate } from "./i18n";
 
 export interface MenuTarget { titleId: string; titleName: string; coverUrl?: string; gamerscore?: number; gamerscoreTotal?: number; unlocked?: number; total?: number; updatedAt?: number; }
@@ -49,32 +50,105 @@ function GameViewAchievements({ appId, icon, onOpen }: { appId: number; icon: Re
   const target = useMenuTarget(appId);
   const locale = useSyncExternalStore(subscribeLanguage, getPluginLanguage);
   const anchor = useRef<HTMLSpanElement>(null);
-  const [hero, setHero] = useState<Element | null>(null);
+  const scoreButton = useRef<HTMLDivElement>(null);
+  const [hero, setHero] = useState<HTMLElement | null>(null);
+  const [providers, setProviders] = useState<ReturnType<typeof headerNavigationProviders>>([]);
   useEffect(() => {
     const parent = anchor.current?.parentElement;
     if (!parent) return;
     const findHero = () => {
       const header = [...parent.children].find(child => child.classList.contains(appDetailsClasses.Header));
-      const capsule = header?.querySelector(`.${appDetailsHeaderClasses.TopCapsule}`);
-      setHero(previous => previous === capsule ? previous : capsule ?? null);
+      const capsule = header?.querySelector<HTMLElement>(`.${appDetailsHeaderClasses.TopCapsule}`);
+      setHero(capsule ?? null);
+      const next = capsule ? headerNavigationProviders(capsule) : [];
+      setProviders(previous => previous.length === next.length && previous.every((provider, index) =>
+        provider.type === next[index].type && provider.value === next[index].value) ? previous : next);
     };
     findHero();
     const observer = new MutationObserver(findHero);
     observer.observe(parent, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, [appId, !!target]);
+  useEffect(() => {
+    const container = anchor.current?.parentElement;
+    const button = scoreButton.current;
+    if (!container || !hero || !button) return;
+
+    let leftNeighbor: HTMLElement | null = null;
+    let belowNeighbor: HTMLElement | null = null;
+    const moveFocus = (event: Event, destination: HTMLElement) => {
+      const ownerWindow = destination.ownerDocument.defaultView;
+      if (!ownerWindow) return;
+      const request = new ownerWindow.CustomEvent("vgp_requestfocus", {
+        bubbles: true, cancelable: true, detail: (event as CustomEvent).detail,
+      });
+      if (destination.dispatchEvent(request)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const onHeroDirection = (event: Event) => {
+      const { button: direction, is_repeat } = (event as CustomEvent<{ button: GamepadButton; is_repeat?: boolean }>).detail;
+      if (event.defaultPrevented || is_repeat) return;
+      const source = event.target as HTMLElement;
+      const tile = button.getBoundingClientRect();
+      const origin = source.getBoundingClientRect();
+      if (direction === GamepadButton.DIR_RIGHT && origin.right <= tile.left &&
+          origin.top < tile.bottom && origin.bottom > tile.top) {
+        leftNeighbor = source;
+        moveFocus(event, button);
+      }
+    };
+    const onTileDirection = (event: Event) => {
+      const { button: direction, is_repeat } = (event as CustomEvent<{ button: GamepadButton; is_repeat?: boolean }>).detail;
+      if (event.defaultPrevented || is_repeat) return;
+      const source = event.target as HTMLElement;
+      if (source === button) {
+        const neighbor = direction === GamepadButton.DIR_LEFT ? leftNeighbor
+          : direction === GamepadButton.DIR_DOWN ? belowNeighbor : null;
+        if (neighbor && container.contains(neighbor)) moveFocus(event, neighbor);
+        return;
+      }
+      if (direction !== GamepadButton.DIR_UP) return;
+      const tile = button.getBoundingClientRect();
+      const origin = source.getBoundingClientRect();
+      const heroBottom = hero.getBoundingClientRect().bottom;
+      if (origin.top >= heroBottom && origin.top < heroBottom + 64 && origin.right > tile.left) {
+        belowNeighbor = source;
+        moveFocus(event, button);
+      }
+    };
+    // Let the horizontal hero row handle Right first. Its unhandled edge event
+    // can cross into the tile, which Steam registers in a separate vertical group.
+    container.addEventListener("vgp_ondirection", onHeroDirection);
+    container.addEventListener("vgp_ondirection", onTileDirection, true);
+    return () => {
+      container.removeEventListener("vgp_ondirection", onHeroDirection);
+      container.removeEventListener("vgp_ondirection", onTileDirection, true);
+    };
+  }, [hero, !!target]);
   if (!target || typeof target.gamerscore !== "number" || typeof target.gamerscoreTotal !== "number") return null;
-  const badge = <div className="nexus-game-view-achievements" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 5 }}>
-    <DialogButton aria-label={translate(locale, "View all achievements")}
-      style={{ position: "absolute", right: 16, top: 46, width: "auto", minWidth: 0, height: "auto", padding: "6px 10px", borderRadius: 6,
+  const label = translate(locale, "View all achievements");
+  let badge: ReactNode = <div className="nexus-game-view-achievements" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 5 }}>
+    <style>{`
+      .nexus-game-view-achievements .nexus-game-view-score:is(.gpfocus, :focus-visible) {
+        background: #fff !important;
+        color: #0e141b !important;
+      }
+      .nexus-game-view-score:is(.gpfocus, :focus-visible) .nexus-gamerscore-icon circle { fill: #0e141b !important; }
+      .nexus-game-view-score:is(.gpfocus, :focus-visible) .nexus-gamerscore-icon path { stroke: #fff !important; }
+    `}</style>
+    <Focusable ref={scoreButton} role="button" noFocusRing className="nexus-game-view-score"
+      aria-label={label} onOKActionDescription={label} onActivate={() => onOpen(target)}
+      style={{ position: "absolute", right: 16, top: 46, width: "auto", minWidth: 0, height: "auto", cursor: "pointer", padding: "6px 10px", borderRadius: 6,
         pointerEvents: "auto", background: "rgba(20,27,36,0.94)", color: "#fff", boxShadow: "0 2px 8px rgba(0,0,0,0.3)", opacity: 1 }}
       onClick={() => onOpen(target)}>
       <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 5, fontSize: 13, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
         {icon}{target.gamerscore}/{target.gamerscoreTotal}
       </span>
       <span style={{ display: "block", fontSize: 11, opacity: 0.9 }}>{translate(locale, "{unlocked}/{total} unlocked", { unlocked: target.unlocked ?? 0, total: target.total ?? 0 })}</span>
-    </DialogButton>
+    </Focusable>
   </div>;
+  for (const provider of providers) badge = createElement(provider.type, { value: provider.value }, badge);
   return <><span ref={anchor} hidden data-nexus-score-anchor="true" />
     {hero && (window as any).SP_REACTDOM.createPortal(badge, hero)}
   </>;
