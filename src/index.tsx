@@ -481,7 +481,7 @@ function MythicProgress({ detail, mythicOnly, onChange }: { detail: TitleDetail;
     {t(detail.mythicUnavailable === "backend" ? "Update the Nexus achievement backend for Mythic support." : "Mythic progress is unavailable for this game.")}
   </div>;
   return <section style={{ padding: 12, marginBottom: 12, borderRadius: 10, background: "rgba(143,219,143,0.08)", display: "flex", alignItems: "center", gap: 16 }}>
-    <div style={{ width: 80, height: 80, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}><MythicIcon size={80} /></div>
+    <div style={{ width: 80, height: 80, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}><MythicIcon size={80} locked={!group.unlocked} /></div>
     <div style={{ flex: 1, minWidth: 0 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       <strong>{t("Mythic achievement")}</strong>{group.unlocked && <MythicBadge />}

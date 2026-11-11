@@ -16,7 +16,7 @@ vm.runInNewContext(compiled, { exports: output, React, require: name => name.end
   ? readFileSync(new URL(`../src/${name.slice(0, -"?inline".length)}`, import.meta.url), 'utf8') : name === 'react' ? { useId: () => `:icon${++nextId}:` } : require(name) });
 
 test('Rare and Mythic badges render native SVG without image loading', () => {
-  for (const Icon of [output.RareIcon, output.MythicIcon]) {
+  for (const Icon of [output.RareIcon, output.MythicIcon, props => output.MythicIcon({ ...props, locked: true })]) {
     const node = Icon({ size: 20 });
     assert.equal(node.type, 'svg');
     const markup = node.props.dangerouslySetInnerHTML.__html;
@@ -25,13 +25,14 @@ test('Rare and Mythic badges render native SVG without image loading', () => {
     assert.equal(node.props.width, 20); assert.equal(node.props.height, 20);
   }
 });
-test('multiple vector badges have isolated gradient IDs and valid references', () => {
-  const markup = [output.RareIcon({}), output.RareIcon({}), output.MythicIcon({})].map(node => node.props.dangerouslySetInnerHTML.__html).join('');
+test('multiple vector badges have isolated IDs and valid references', () => {
+  const markup = [output.RareIcon({}), output.RareIcon({}), output.MythicIcon({}),
+    output.MythicIcon({ locked: true }), output.MythicIcon({ locked: true })].map(node => node.props.dangerouslySetInnerHTML.__html).join('');
   const ids = [...markup.matchAll(/id="([^"]+)"/g)].map(match => match[1]);
   assert.equal(new Set(ids).size, ids.length);
   assert.equal(output.RareIcon({}).props.viewBox, '0 0 576 512');
   assert.equal(output.MythicIcon({}).props.viewBox, '0 0 128 128');
-  for (const match of markup.matchAll(/url\(#([^)]+)\)/g)) assert.ok(ids.includes(match[1]));
+  for (const match of markup.matchAll(/url\(#([^)]+)\)|href="#([^"]+)"/g)) assert.ok(ids.includes(match[1] ?? match[2]));
 });
 
 test('TA emblem inherits focus color without a solid background disc', () => {
