@@ -8,14 +8,14 @@ test('the production bundle embeds SVG documents rather than asset-loader module
   const source = ts.createSourceFile('index.js', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const artwork = new Map();
   function visit(node) {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && ['rareSvg', 'mythicSvg'].includes(node.name.text)) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && ['rareSvg', 'mythicSvg', 'lockedMythicSvg'].includes(node.name.text)) {
       assert.ok(ts.isStringLiteral(node.initializer));
       artwork.set(node.name.text, node.initializer.text);
     }
     ts.forEachChild(node, visit);
   }
   visit(source);
-  assert.equal(artwork.size, 2);
+  assert.equal(artwork.size, 3);
   for (const [name, markup] of artwork) {
     assert.match(markup.trimStart(), /^<svg\s/, name);
     assert.match(markup, /<path\s/, name);
