@@ -12,6 +12,7 @@ from urllib.request import Request
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import main
 import ta_session as auth
+import ta_bridge
 import trueachievements as ta
 import ta_worker
 
@@ -77,13 +78,22 @@ class SessionTests(unittest.TestCase):
             session = auth.TASession(Path(directory) / 'session.json')
             client = ta.TrueAchievements(Path(directory), session)
             client.attempts['42'] = 100
-            with patch.object(ta_worker, 'browser_session', new=AsyncMock(return_value=session_data())):
-                self.assertEqual(await ta_worker.dispatch(client, session, {'action': 'connect'}), {'status': 'connected'})
-                self.assertEqual(client.attempts, {})
-                self.assertGreater(client.refresh_after, 0)
-                self.assertEqual(await ta_worker.dispatch(client, session, {'action': 'status'}), {'status': 'connected'})
-                self.assertEqual(await ta_worker.dispatch(client, session, {'action': 'disconnect'}), {'status': 'disconnected'})
-                self.assertFalse(session.path.exists())
+            with patch.object(main, "browser_session", new=AsyncMock(return_value=session_data())):
+                plugin = main.Plugin()
+                plugin._ta_worker = ta_bridge.TAWorker(Path(directory))
+                try:
+                    self.assertEqual(await plugin.connect_ta_session(), {"status": "connected"})
+                finally:
+                    await plugin._ta_worker.close()
+            session = auth.TASession(Path(directory) / "session.json")
+            self.assertEqual(await ta_worker.dispatch(client, session, {
+                "action": "connect", "detail": session_data(),
+            }), {"status": "connected"})
+            self.assertEqual(client.attempts, {})
+            self.assertGreater(client.refresh_after, 0)
+            self.assertEqual(await ta_worker.dispatch(client, session, {"action": "status"}), {"status": "connected"})
+            self.assertEqual(await ta_worker.dispatch(client, session, {"action": "disconnect"}), {"status": "disconnected"})
+            self.assertFalse(session.path.exists())
         with tempfile.TemporaryDirectory() as directory:
             asyncio.run(run(directory))
 
@@ -91,7 +101,7 @@ class SessionTests(unittest.TestCase):
         async def run(directory):
             session = auth.TASession(Path(directory) / 'session.json')
             client = ta.TrueAchievements(Path(directory), session)
-            with patch.object(ta_worker, 'browser_session', new=AsyncMock(side_effect=RuntimeError('fixture-secret'))):
+            with patch.object(session, 'connect', side_effect=RuntimeError('fixture-secret')):
                 result = await ta_worker.dispatch(client, session, {'action': 'connect'})
                 self.assertEqual(result['error'], 'verification_failed')
                 self.assertNotIn('fixture-secret', json.dumps(result))
@@ -128,7 +138,7 @@ class BrowserSessionTests(unittest.TestCase):
                 return Context(WS())
         client = Client()
         with patch.dict(sys.modules, {'aiohttp': SimpleNamespace(ClientSession=lambda **kwargs: Context(client), ClientTimeout=lambda **kwargs: None)}):
-            result = asyncio.run(auth.browser_session())
+            result = asyncio.run(ta_bridge.browser_session())
         self.assertTrue(result['authenticated'])
         self.assertEqual(client.url, 'http://127.0.0.1:8080/json')
         self.assertTrue(client.websocket.endswith('/ta'))
@@ -143,7 +153,7 @@ class BrowserSessionTests(unittest.TestCase):
                 return Context(SimpleNamespace(json=response))
         with patch.dict(sys.modules, {'aiohttp': SimpleNamespace(ClientSession=lambda **kwargs: Context(Client()), ClientTimeout=lambda **kwargs: None)}):
             with self.assertRaisesRegex(auth.SessionError, 'browser_unavailable'):
-                asyncio.run(auth.browser_session())
+                asyncio.run(ta_bridge.browser_session())
 
     def test_remote_debugger_addresses_are_never_contacted(self):
         class Client:
@@ -155,4 +165,4 @@ class BrowserSessionTests(unittest.TestCase):
                 raise AssertionError('Must not contact a remote debugger')
         with patch.dict(sys.modules, {'aiohttp': SimpleNamespace(ClientSession=lambda **kwargs: Context(Client()), ClientTimeout=lambda **kwargs: None)}):
             with self.assertRaises(auth.SessionError):
-                asyncio.run(auth.browser_session())
+                asyncio.run(ta_bridge.browser_session())
