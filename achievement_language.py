@@ -6,6 +6,7 @@ import os
 import pwd
 import shutil
 from pathlib import Path
+from typing import Union
 from mythic import parse_mythic
 
 LANGUAGES = {
@@ -107,8 +108,8 @@ async def run_bounded(command: list[str], env: dict[str, str]) -> tuple[int, byt
         await process.wait()
 
 
-def localized_text(raw: bytes, title_id: str) -> dict[str, tuple[str, str]]:
-    data = json.loads(raw)
+def localized_text(raw: Union[bytes, dict], title_id: str) -> dict[str, tuple[str, str]]:
+    data = json.loads(raw) if isinstance(raw, bytes) else raw
     if (not isinstance(data, dict) or data.get("schema") != 1
             or data.get("titleId") != title_id or not isinstance(data.get("items"), list)
             or len(data["items"]) > 500):
@@ -153,6 +154,26 @@ def achievement_rarities(data: dict) -> dict:
     return result
 
 
+async def backend_account(command: list[str], env: dict[str, str]) -> str:
+    code, raw = await run_bounded([*command, "account", "--json"], env)
+    data = json.loads(raw) if not code else None
+    if not isinstance(data, dict):
+        return ""
+    player = data.get("player")
+    username = player.get("username") if isinstance(player, dict) else data.get("username")
+    return username.strip().casefold() if isinstance(username, str) else ""
+
+
+async def _read_achievements(command: list[str], env: dict[str, str], args: list[str]) -> dict:
+    code, raw = await run_bounded([*command, *args], env)
+    if code:
+        raise ValueError("Could not load this language from Xbox. Check your Nexus sign-in and connection.")
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("Invalid achievement response.")
+    return data
+
+
 async def translate_title(home: Path, detail: dict, language: str) -> dict:
     if language not in LANGUAGES:
         raise ValueError("Unsupported achievement language.")
@@ -164,7 +185,7 @@ async def translate_title(home: Path, detail: dict, language: str) -> dict:
         if language:
             raise ValueError("Language selection requires a numeric Xbox title ID.")
         return detail
-    command, code, help_text = [], 1, b""
+    command, env, code, help_text = [], {}, 1, b""
     try:
         command, env = (backend_command(home, unifideck=True)
                         if unifideck else backend_command(home))
@@ -172,6 +193,8 @@ async def translate_title(home: Path, detail: dict, language: str) -> dict:
     except (OSError, ValueError, asyncio.TimeoutError):
         if language and not unifideck:
             raise
+    source_command, source_env = command, env
+    using_helper = False
     if unifideck and (code or b"--include-mythic" not in help_text or
                       (language and b"--language" not in help_text)):
         try:
@@ -181,6 +204,7 @@ async def translate_title(home: Path, detail: dict, language: str) -> dict:
                 if (not helper_code and b"--include-mythic" in helper_help
                         and (not language or b"--language" in helper_help)):
                     command, env, code, help_text = helper, helper_env, helper_code, helper_help
+                    using_helper = True
         except (OSError, ValueError, asyncio.TimeoutError):
             pass
     supports_mythic = not code and b"--include-mythic" in help_text
@@ -188,17 +212,30 @@ async def translate_title(home: Path, detail: dict, language: str) -> dict:
         raise ValueError("Update the Nexus backend to a version supporting achievement languages, or select Original.")
     if not language and not supports_mythic:
         return {**detail, "mythicUnavailable": "backend"}
-    args = [*command, "achievements", title_id, "--json"]
+    args = ["achievements", title_id, "--json"]
     if language:
         args += ["--language", language]
     if supports_mythic:
         args += ["--include-mythic"]
     try:
-        code, raw = await run_bounded(args, env)
-        if code:
-            raise ValueError("Could not load this language from Xbox. Check your Nexus sign-in and connection.")
-        data = json.loads(raw)
-        text = localized_text(raw, title_id) if language else {}
+        try:
+            data = await _read_achievements(command, env, args)
+        except (OSError, ValueError, asyncio.TimeoutError):
+            if not using_helper or not source_command:
+                raise
+            # Unifideck can renew its session during gameplay. Retry with the
+            # separate Nexus session only when it belongs to the same player.
+            nexus, nexus_env = backend_command(home)
+            if nexus == command and nexus_env == env:
+                raise
+            account = await backend_account(source_command, source_env)
+            if not account or account != await backend_account(nexus, nexus_env):
+                raise
+            data = await _read_achievements(nexus, nexus_env, args)
+            returned_account = data.get("account")
+            if not isinstance(returned_account, str) or returned_account.strip().casefold() != account:
+                raise ValueError("Xbox account changed while loading achievements.")
+        text = localized_text(data, title_id) if language else {}
         group, membership = parse_mythic(data, title_id)
         rarities = achievement_rarities(data)
     except (OSError, ValueError, asyncio.TimeoutError):
