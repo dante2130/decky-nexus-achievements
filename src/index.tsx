@@ -576,6 +576,11 @@ function AchievementRow({ a, ta, reveal, onToggle, onFlag, favorite = false, tra
   const hasRevealButton = a.secret && !a.unlocked;
   const hidden = a.secret && !a.unlocked && !reveal;
   const progress = a.unlocked ? 100 : a.progress !== null && Number.isFinite(a.progress) ? Math.max(0, Math.min(100, a.progress)) : null;
+  const rarity = a.rarity;
+  const rare = rarity?.category === "Rare";
+  const rarityText = rarity && Number.isFinite(rarity.percentage) && rarity.percentage >= 0 && rarity.percentage <= 100
+    ? t("{percentage} of players unlocked", { percentage: new Intl.NumberFormat(pluginLocales[locale], { style: "percent", maximumFractionDigits: 2 }).format(rarity.percentage / 100) })
+    : "";
   const revealed = a.secret && !a.unlocked && reveal;
   const name = a.name || t("Unnamed achievement");
   const description = a.description || (revealed ? t("Details unavailable for this secret achievement.") : "");
@@ -584,10 +589,17 @@ function AchievementRow({ a, ta, reveal, onToggle, onFlag, favorite = false, tra
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: "bold" }}>{hidden ? t("Secret achievement") : name}</div>
         <div style={{ fontSize: 13, opacity: 0.8 }}>{hidden ? t("Keep playing to reveal this achievement.") : description}</div>
-        {a.rarity && Number.isFinite(a.rarity.percentage) && a.rarity.percentage >= 0 && a.rarity.percentage <= 100 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.8, marginTop: 4 }}>
-            {a.rarity.category === "Rare" && <><RareIcon /><span>{t("Rare")}</span><span>·</span></>}
-            <span>{t("{percentage} of players unlocked", { percentage: new Intl.NumberFormat(pluginLocales[locale], { style: "percent", maximumFractionDigits: 2 }).format(a.rarity.percentage / 100) })}</span>
+        {(rarityText || (a.unlocked && a.unlockedAt)) && (
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "2px 6px", marginTop: 4, fontSize: 12, opacity: 0.8 }}>
+            {rare && rarityText && <>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><RareIcon />{t("Rare")}</span>
+              <span aria-hidden="true">·</span>
+            </>}
+            {rarityText && <span>{rarityText}</span>}
+            {a.unlocked && a.unlockedAt && <>
+              {rarityText && <span aria-hidden="true">·</span>}
+              <span>{t("Unlocked {date}", { date: fmtDate(a.unlockedAt) })}</span>
+            </>}
           </div>
         )}
         {!hidden && ta?.flags && ta.flags.length > 0 && <Focusable flow-children="row" className="nexus-ta-flags" style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
@@ -600,7 +612,6 @@ function AchievementRow({ a, ta, reveal, onToggle, onFlag, favorite = false, tra
           </DialogButton>)}
         </Focusable>}
         {a.baseGame === false && <div style={{ fontSize: 11, opacity: 0.7 }}>{t("Add-on")}</div>}
-        {a.unlocked && a.unlockedAt && <div style={{ fontSize: 12, opacity: 0.7 }}>{t("Unlocked {date}", { date: fmtDate(a.unlockedAt) })}</div>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
         <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}><GamerscoreIcon /> {hidden ? "?" : a.gamerscore}</div>
@@ -960,7 +971,7 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
   );
 }
 
-function RunningGame({ onSelect, showPlayingText = false, flushCover = false }: { onSelect: (titleId: string) => void; showPlayingText?: boolean; flushCover?: boolean }) {
+function useRunningTitle() {
   const [title, setTitle] = useState<TitleSummary | null>(null);
   useEffect(() => {
     let live = true;
@@ -970,8 +981,12 @@ function RunningGame({ onSelect, showPlayingText = false, flushCover = false }: 
     const timer = setInterval(refresh, 3000);
     return () => { live = false; clearInterval(timer); };
   }, []);
-  if (!title) return null;
-  return <TitleRow title={title} onSelect={onSelect} playing showPlayingText={showPlayingText} flushCover={flushCover} />;
+  return title;
+}
+
+function RunningGame({ onSelect }: { onSelect: (titleId: string) => void }) {
+  const title = useRunningTitle();
+  return title && <TitleRow title={title} onSelect={onSelect} playing flushCover />;
 }
 
 function TitleRow({ title, onSelect, playing = false, showPlayingText = false, flushCover = false }: {
@@ -1006,6 +1021,7 @@ let installedGamesOnly = false;
 function AchievementsPage() {
   const { locale, t } = usePluginTranslation();
   const [titles, setTitles] = useState<TitleSummary[] | null>(() => gamesCache.peek("titles") ?? null);
+  const runningTitle = useRunningTitle();
   const [gameQuery, setGameQuery] = useState("");
   const [installedOnly, setInstalledOnly] = useState(installedGamesOnly);
   const [installedFilterError, setInstalledFilterError] = useState(false);
@@ -1064,11 +1080,15 @@ function AchievementsPage() {
     return () => { cancelAnimationFrame(firstFrame); cancelAnimationFrame(secondFrame); };
   }, [selected]);
 
-  const title = titles?.find(t => t.titleId === selected) ?? (requestedGame?.titleId === selected ? requestedGame : undefined);
+  const title = titles?.find(t => t.titleId === selected)
+    ?? (runningTitle?.titleId === selected ? runningTitle : undefined)
+    ?? (requestedGame?.titleId === selected ? requestedGame : undefined);
   const matchingTitles = useMemo(() => {
     const query = gameQuery.trim().toLocaleLowerCase();
-    return titles?.filter(item => (!installedOnly || item.installed === true) && item.titleName.toLocaleLowerCase().includes(query)) ?? [];
-  }, [titles, gameQuery, installedOnly]);
+    return titles?.filter(item => item.titleId !== runningTitle?.titleId
+      && (!installedOnly || item.installed === true)
+      && item.titleName.toLocaleLowerCase().includes(query)) ?? [];
+  }, [titles, gameQuery, installedOnly, runningTitle?.titleId]);
 
   return (
     <Focusable ref={pageRef} tabIndex={0} noFocusRing flow-children="column" navEntryPreferPosition={NavEntryPositionPreferences.FIRST} preferredFocus
@@ -1090,7 +1110,9 @@ function AchievementsPage() {
       ) : (
         <div>
           <h1 style={{ margin: "0 0 12px" }}>{t("Nexus Achievements")}</h1>
-          <div style={{ marginBottom: 8 }}><RunningGame onSelect={selectTitle} showPlayingText flushCover /></div>
+          {runningTitle && <div style={{ marginBottom: 8 }}>
+            <TitleRow title={runningTitle} onSelect={selectTitle} playing showPlayingText flushCover />
+          </div>}
           <ToggleField label={t("Installed games only")} checked={installedOnly} onChange={async enabled => {
             const revision = ++installedFilterRevision.current;
             installedGamesOnly = enabled; setInstalledOnly(enabled); setInstalledFilterError(false);
@@ -1103,10 +1125,10 @@ function AchievementsPage() {
           </div>
           {titles === null && <div>{t("Loading…")}</div>}
           {error && <div style={{ padding: 8 }}>{translateError(locale, error)}</div>}
-          {titles && titles.length === 0 && !error && (
+          {titles && titles.length === 0 && !runningTitle && !error && (
             <div style={{ opacity: 0.7 }}>{t("No achievements yet. Play a Nexus game to start unlocking.")}</div>
           )}
-          {titles && titles.length > 0 && matchingTitles.length === 0 && !error && (
+          {titles?.some(item => item.titleId !== runningTitle?.titleId) && matchingTitles.length === 0 && !error && (
             <div style={{ padding: "12px 0", opacity: 0.7 }}>{t("No games match these filters.")}</div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1206,7 +1228,7 @@ function Content() {
       <PanelSectionRow><HideTrackerButton /></PanelSectionRow>
       <SettingsGroup title={t("Achievements")}>
         <PanelSectionRow>
-          <RunningGame flushCover onSelect={titleId => { requestedHideAllTitles = false; requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
+          <RunningGame onSelect={titleId => { requestedHideAllTitles = false; requestedTitle = titleId; Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }} />
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => { Navigation.CloseSideMenus(); Navigation.Navigate(ROUTE); }}>

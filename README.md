@@ -78,8 +78,10 @@ installed title when Store metadata is unavailable. Restart an updated launcher
 to refresh existing snapshots.
 
 While a game is running, the main panel shows a play icon beside its title.
-The all-games page shows “Now playing” beside the title. Select either row to
-open that game’s achievements. The launcher publishes `running.json` alongside
+The All Games page shows the current game once in a dedicated “Now playing”
+row above the filtered list. Select that row to open the game’s achievements.
+When the game exits, it returns to the list if it matches the current filters.
+The launcher publishes `running.json` alongside
 the snapshots; the plugin polls it every three seconds and ignores records whose
 launcher process has exited. Older launchers still support the ordinary list.
 
@@ -105,21 +107,15 @@ Other languages fetch localized text from Xbox through the signed-in Nexus
 backend. Xbox may fall back to another language when a game has no translation.
 Unlock state, score, and secret visibility continue to use the original snapshot.
 
-Localized reads require a Nexus backend supporting
-`xodus-cli achievements TITLE_ID --json --language LANGUAGE_TAG`. Backend 0.2.14 does
-not support this option. The corresponding backend source change is included in
-`backend-patches/achievement-language.patch`; apply it in the `nexus-backend`
-source checkout at commit `a80cfa0b822d777b6344971079cdea99e5ebfdf9` with
-`git apply` and build/install that backend using its own
-build instructions. The plugin reports an update requirement for older backends;
-select **Original** to keep viewing saved achievements. The managed backend is
-resolved from `~/.config/xodus-nexus/xodus-backends/current.json` and runs as the
-Deck user, using their existing Nexus sign-in. You can also install the language-enabled
-backend from [dante2130/nexus-backend](https://github.com/dante2130/nexus-backend)
-under `~/.local/share/nexus-launcher/achievement-backend/` (containing `xodus-cli`
-and `xodus-service`). The plugin prefers that copy, so language support can be
-installed without changing the launcher's managed backend. Failed localized reads
-show a warning while preserving the saved achievement list.
+The [Nexus backend fork](https://github.com/dante2130/nexus-backend/tree/f51b5fd4bf01b141ca8a6fb0f3187b89bec6b523)
+includes achievement languages, Xbox-reported Rare metadata, and Mythic
+completion. Follow the fork's build instructions and install the resulting
+`xodus-cli` at `~/.local/share/nexus-launcher/achievement-backend/xodus-cli`.
+Check for both `--language` and `--include-mythic` in `xodus-cli achievements --help`.
+The plugin prefers this helper and runs it as the Deck user with their existing
+Nexus sign-in. It also supports the managed backend selected by
+`~/.config/xodus-nexus/xodus-backends/current.json`.
+Failed localized reads show a warning while preserving the saved achievement list.
 
 ### Mythic achievements
 
@@ -144,9 +140,7 @@ background metadata refresh without delaying achievement notifications. The glob
 notification switch applies to Mythic notifications too. Offline and older-backend
 fallbacks preserve saved achievement rows.
 
-The required backend is built in [dante2130/nexus-backend](https://github.com/dante2130/nexus-backend).
-Install the compatible helper under the separate achievement-backend directory
-described above. This feature never awards or writes achievements on Xbox.
+Mythic uses the same backend helper described above.
 
 ## Unifideck Xbox PC
 
