@@ -19,21 +19,61 @@ LANGUAGES = {
 MAX_OUTPUT = 4 * 1024 * 1024
 
 
-def backend_command(home: Path) -> tuple[list[str], dict[str, str]]:
+UNIFIDECK_TITLE_PREFIX = "unifideck."
+
+
+def unifideck_root(home: Path) -> Path:
+    data_home = Path(os.environ.get("XDG_DATA_HOME", ""))
+    return (data_home if data_home.is_absolute() else home / ".local/share") / "unifideck/xbox_pc"
+
+
+def _unifideck_binary(root: Path) -> Path:
+    try:
+        active = json.loads((root / "active.json").read_text())
+        directory = Path(active["backend"]["dir"])
+        if active["schema"] != 1 or directory.is_absolute() or directory.parent != Path("backend"):
+            raise ValueError
+    except FileNotFoundError:
+        try:
+            backend = json.loads((root / "backend_only.json").read_text())
+            name = Path(backend["dir"])
+            if name.parent != Path("."):
+                raise ValueError
+            directory = Path("backend") / name
+        except (OSError, ValueError, KeyError, TypeError):
+            raise ValueError("Unifideck Xbox PC backend is not installed.") from None
+    except (OSError, ValueError, KeyError, TypeError):
+        raise ValueError("Unifideck Xbox PC backend is not installed.") from None
+    binary = root / directory / "xodus-cli"
+    if directory.name in ("", "backend", "..") or not binary.is_file():
+        raise ValueError("Unifideck Xbox PC backend is not installed.")
+    return binary
+
+
+def backend_command(home: Path, *, unifideck: bool = False) -> tuple[list[str], dict[str, str]]:
     # Execute as the Deck user so the backend uses their existing sign-in.
     config = home / ".config"
+    root = unifideck_root(home)
     binary = home / ".local/share/nexus-launcher/achievement-backend/xodus-cli"
-    if not binary.is_file():
-        pointer = json.loads((config / "xodus-nexus/xodus-backends/current.json").read_text())
-        binary = Path(pointer["binaryPath"])
-    if not binary.is_absolute() or not binary.is_file():
-        raise ValueError("Nexus achievement backend is not installed.")
+    if not unifideck and not binary.is_file():
+        try:
+            pointer = json.loads((config / "xodus-nexus/xodus-backends/current.json").read_text())
+            binary = Path(pointer["binaryPath"])
+        except (OSError, ValueError, KeyError, TypeError):
+            unifideck = True
+        else:
+            unifideck = not binary.is_absolute() or not binary.is_file()
+    if unifideck:
+        binary = _unifideck_binary(root)
     owner = pwd.getpwuid(home.stat().st_uid)
     command = [str(binary)]
     user_env = {"HOME": str(home), "USER": owner.pw_name, "LOGNAME": owner.pw_name,
                 "XDG_CONFIG_HOME": str(config), "XDG_DATA_HOME": str(home / ".local/share"),
                 "XDG_CACHE_HOME": str(home / ".cache"), "XDG_RUNTIME_DIR": f"/run/user/{owner.pw_uid}",
                 "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{owner.pw_uid}/bus"}
+    if unifideck:
+        user_env["XODUS_CREDENTIAL_DIR"] = str(root / "credentials")
+        user_env["XDG_DATA_HOME"] = str(root.parent.parent)
     env = dict(os.environ, **user_env)
     if os.geteuid() != owner.pw_uid:
         runuser = shutil.which("runuser") or "/usr/sbin/runuser"
@@ -107,23 +147,50 @@ def achievement_rarities(data: dict) -> dict:
     return result
 
 
+async def backend_account(command: list[str], env: dict[str, str]) -> str:
+    code, raw = await run_bounded([*command, "account", "--json"], env)
+    data = json.loads(raw) if not code else None
+    if not isinstance(data, dict):
+        return ""
+    player = data.get("player")
+    username = player.get("username") if isinstance(player, dict) else data.get("username")
+    return username.strip().casefold() if isinstance(username, str) else ""
+
+
 async def translate_title(home: Path, detail: dict, language: str) -> dict:
     if language not in LANGUAGES:
         raise ValueError("Unsupported achievement language.")
     if not detail.get("ok"):
         return detail
-    title_id = detail["titleId"]
+    unifideck = detail["titleId"].startswith(UNIFIDECK_TITLE_PREFIX)
+    title_id = detail["titleId"].removeprefix(UNIFIDECK_TITLE_PREFIX)
     if not title_id.isascii() or not title_id.isdecimal() or not 0 < int(title_id) <= 0xffffffff:
         if language:
             raise ValueError("Language selection requires a numeric Xbox title ID.")
         return detail
     try:
-        command, env = backend_command(home)
+        command, env = (backend_command(home, unifideck=True)
+                        if unifideck else backend_command(home))
         code, help_text = await run_bounded([*command, "achievements", "--help"], env)
     except (OSError, ValueError, asyncio.TimeoutError):
         if language:
             raise
         return {**detail, "mythicUnavailable": "backend"}
+    matched_account = ""
+    if unifideck and (code or b"--include-mythic" not in help_text or
+                      (language and b"--language" not in help_text)):
+        try:
+            helper, helper_env = backend_command(home)
+            if helper != command:
+                helper_code, helper_help = await run_bounded([*helper, "achievements", "--help"], helper_env)
+                if (not helper_code and b"--include-mythic" in helper_help
+                        and (not language or b"--language" in helper_help)):
+                    account = await backend_account(command, env)
+                    if account and account == await backend_account(helper, helper_env):
+                        command, env, code, help_text = helper, helper_env, helper_code, helper_help
+                        matched_account = account
+        except (OSError, ValueError, asyncio.TimeoutError):
+            pass
     supports_mythic = not code and b"--include-mythic" in help_text
     if language and (code or b"--language" not in help_text):
         raise ValueError("Update the Nexus backend to a version supporting achievement languages, or select Original.")
@@ -139,6 +206,10 @@ async def translate_title(home: Path, detail: dict, language: str) -> dict:
         if code:
             raise ValueError("Could not load this language from Xbox. Check your Nexus sign-in and connection.")
         data = json.loads(raw)
+        if matched_account:
+            account = data.get("account") if isinstance(data, dict) else None
+            if not isinstance(account, str) or account.strip().casefold() != matched_account:
+                raise ValueError("Xbox account changed while loading achievements.")
         text = localized_text(raw, title_id) if language else {}
         group, membership = parse_mythic(data, title_id)
         rarities = achievement_rarities(data)
