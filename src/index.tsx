@@ -786,6 +786,7 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
 
   useEffect(() => {
     let live = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     const key = achievementCacheKey(title);
     if (!achievementCache.peek(key)) {
       // Never make the first local list wait for an optional Xbox metadata read.
@@ -793,17 +794,26 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
         if (live && saved.ok) setDetail(previous => previous?.ok ? previous : saved);
       }).catch(() => {});
     }
-    achievementCache.load(key, async () => {
+    const load = (canRetry: boolean) => achievementCache.load(key, async () => {
       const result = await getTitleAchievements(title.titleId);
       if (!result.ok) throw new Error(result.error || "Failed to load");
       return result;
-    }, 60_000, result => !result.languageError)
+    }, 60_000, result => !result.languageError && result.mythicUnavailable !== "data")
       .then(d => {
+        if (!live) return;
         if (d.mythic) mythicByTitle.set(title.titleId, d.mythic);
-        if (live) setDetail(d);
+        setDetail(d);
+        if (canRetry && (d.languageError || d.mythicUnavailable === "data")) {
+          retry = setTimeout(() => { void load(false); }, 2000);
+        }
       })
-      .catch(() => { if (live) setDetail(previous => previous?.ok ? previous : { ok: false, error: "Failed to load", achievements: [] }); });
-    return () => { live = false; };
+      .catch(() => {
+        if (!live) return;
+        if (canRetry) retry = setTimeout(() => { void load(false); }, 2000);
+        else setDetail(previous => previous?.ok ? previous : { ok: false, error: "Failed to load", achievements: [] });
+      });
+    void load(true);
+    return () => { live = false; clearTimeout(retry); };
   }, [title.titleId, title.updatedAt, tick, languageRevision]);
 
   useEffect(() => {

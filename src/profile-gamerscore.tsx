@@ -16,25 +16,34 @@ let generation = 0;
 let timer: ReturnType<typeof setInterval> | undefined;
 let pending: Promise<void> | undefined;
 let unlockTimer: ReturnType<typeof setTimeout> | undefined;
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
 async function refresh(force = false) {
   if (!state.enabled) return;
   if (pending) return pending;
   const version = generation;
+  clearTimeout(retryTimer);
   const request = readScore(force).then(value => {
     if (version !== generation || !state.enabled) return;
     const valid = value.ok && Number.isInteger(value.gamerscore) && value.gamerscore! >= 0 && value.gamerscore! <= 0xffffffff;
     publish({ ...state, score: valid ? value.gamerscore! : null, unavailable: !valid });
   }).catch(() => { if (version === generation && state.enabled) publish({ ...state, score: null, unavailable: true }); });
   pending = request;
-  try { await request; } finally { if (pending === request) pending = undefined; }
+  try {
+    await request;
+  } finally {
+    if (pending === request) pending = undefined;
+    if (version === generation && state.enabled && state.unavailable) {
+      retryTimer = setTimeout(() => { void refresh(); }, 15000);
+    }
+  }
 }
 
 export function setProfileGamerscoreEnabled(enabled: boolean) {
   if (state.enabled === enabled) return;
   generation++;
   pending = undefined;
-  clearInterval(timer); clearTimeout(unlockTimer);
+  clearInterval(timer); clearTimeout(unlockTimer); clearTimeout(retryTimer);
   timer = undefined; unlockTimer = undefined;
   publish({ enabled, score: null, unavailable: false });
   if (enabled) {
@@ -50,7 +59,7 @@ export function refreshProfileGamerscore() {
 
 const headerButtonClasses = findClassModule((value: any) => value.HeaderItem && value.Clickable && value.Clock) as { HeaderItem?: string; Clickable?: string; InQuickAccess?: string } | undefined;
 
-function ProfileScore({ icon, onOpen, iconOnly = false, nativeNavigation = true }: { icon: ReactNode; onOpen: () => void; iconOnly?: boolean; nativeNavigation?: boolean }) {
+function ProfileScore({ icon, onOpen, nativeNavigation = true }: { icon: ReactNode; onOpen: () => void; nativeNavigation?: boolean }) {
   const [controllerFocus, setControllerFocus] = useState(false);
   const value = useProfileGamerscore();
   const locale = useSyncExternalStore(subscribeLanguage, getPluginLanguage);
@@ -69,7 +78,6 @@ function ProfileScore({ icon, onOpen, iconOnly = false, nativeNavigation = true 
         font-weight: 500;
         font-variant-numeric: tabular-nums;
       }
-      .${headerButtonClasses?.InQuickAccess} .nexus-profile-score-value { display: none !important; }
       .nexus-profile-controller-focus,
       .nexus-profile-gamerscore:is(.gpfocus, :focus-visible) {
         background: #fff !important;
@@ -84,7 +92,7 @@ function ProfileScore({ icon, onOpen, iconOnly = false, nativeNavigation = true 
         stroke: #fff !important;
       }
     `}</style>
-    {icon}{!iconOnly && <span className="nexus-profile-score-value">{score}</span>}
+    {icon}<span className="nexus-profile-score-value">{score}</span>
   </>;
   if (!nativeNavigation) return <button type="button" tabIndex={-1}
     className={`${className} nexus-profile-dom-button`} data-nexus-profile-score="true"
@@ -178,10 +186,9 @@ export function installProfileGamerscore(icon: ReactNode, onOpen: () => void): (
     typeof item?.type === "function" && item.type.toString().includes("quickAccessHeader") && item.type.toString().includes("BShowHeader")));
   const headers = module ? Object.values(module).filter((item: any) => typeof item?.type === "function"
     && item.type.toString().includes("quickAccessHeader") && item.type.toString().includes("BShowHeader")) as any[] : [];
-  const patches = headers.map(header => afterPatch(header, "type", (args: any[], tree: any) => {
-    const iconOnly = args[0]?.quickAccessHeader === true || tree?.props?.value?.region === 1;
+  const patches = headers.map(header => afterPatch(header, "type", (_args: any[], tree: any) => {
     if (Array.isArray(tree?.props?.children)) {
-      return cloneElement(tree, {}, <ProfileScore key="nexus-profile-gamerscore" icon={icon} onOpen={onOpen} iconOnly={iconOnly} />, ...tree.props.children);
+      return cloneElement(tree, {}, <ProfileScore key="nexus-profile-gamerscore" icon={icon} onOpen={onOpen} />, ...tree.props.children);
     }
     const row = tree?.props?.children;
     const groups = row?.props?.children;
@@ -193,7 +200,7 @@ export function installProfileGamerscore(icon: ReactNode, onOpen: () => void): (
     const items = group.props.children;
     if (items.some((item: any) => item?.key === "nexus-profile-gamerscore")) return tree;
     const updated = [...groups];
-    updated[index] = cloneElement(group, {}, <ProfileScore key="nexus-profile-gamerscore" icon={icon} onOpen={onOpen} iconOnly={iconOnly} />, ...items);
+    updated[index] = cloneElement(group, {}, <ProfileScore key="nexus-profile-gamerscore" icon={icon} onOpen={onOpen} />, ...items);
     return cloneElement(tree, {}, cloneElement(row, {}, ...updated));
   }));
   return () => { setProfileGamerscoreEnabled(false); routerHook.removeGlobalComponent("NexusProfileGamerscore"); patches.reverse().forEach(patch => patch.unpatch()); };

@@ -768,7 +768,10 @@ class Plugin:
                                                 "mythic": result["mythic"], "iconUrl": mythic_notification_icon(result)})
             return result
         except Exception as error:
-            return {**self._localized_snapshot(detail, language), "languageError": str(error) or "Could not load the selected language."}
+            if decky is not None:
+                decky.logger.warning(f"Achievement metadata refresh failed for {title_id} ({type(error).__name__})")
+            return {**self._preloaded_snapshot(self._localized_snapshot(detail, language)),
+                    "languageError": str(error) or "Could not load the selected language."}
 
     async def get_mythic_progress(self) -> Dict[str, Any]:
         return dict(getattr(self, "_mythic_progress", {}))
