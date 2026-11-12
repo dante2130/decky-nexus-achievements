@@ -93,3 +93,30 @@ class UnifideckTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("LD_LIBRARY_PATH", env)
             self.assertNotIn("PYTHONPATH", env)
             self.assertEqual(result["achievements"][0]["name"], "Erste")
+
+    async def test_retry_with_nexus_session_requires_matching_player(self):
+        detail = {"ok": True, "titleId": "unifideck.42",
+                  "achievements": [{"id": "scid:1", "name": "First"}]}
+
+        def backend(home, *, unifideck=False, use_unifideck_session=False):
+            return ["unifideck" if unifideck else "nexus"], {"shared": use_unifideck_session}
+
+        response = json.dumps({"schema": 1, "titleId": "42", "account": "player",
+                               "items": [{"id": "scid:1", "name": "Erste", "description": ""}]}).encode()
+        for nexus_account in ("PLAYER", "different"):
+            run = AsyncMock(side_effect=[
+                (0, b"--json"), (0, b"--language --include-mythic"), (1, b""),
+                (0, b'{"username":"player"}'),
+                (0, json.dumps({"player": {"username": nexus_account}}).encode()),
+                (0, response),
+            ])
+            with patch.object(achievement_language, "backend_command", backend), \
+                 patch.object(achievement_language, "run_bounded", run):
+                if nexus_account == "PLAYER":
+                    result = await achievement_language.translate_title(self.home, detail, "de-DE")
+                    self.assertEqual(result["achievements"][0]["name"], "Erste")
+                    self.assertEqual(run.await_args.args[1], {"shared": False})
+                else:
+                    with self.assertRaisesRegex(ValueError, "Could not load this language"):
+                        await achievement_language.translate_title(self.home, detail, "de-DE")
+                    self.assertEqual(run.await_count, 5)
