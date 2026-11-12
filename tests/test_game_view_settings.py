@@ -10,6 +10,15 @@ import main
 
 
 class GameViewSettingsTests(unittest.TestCase):
+    def test_named_dlc_filter_round_trips_through_settings(self):
+        plugin = self.plugin()
+        with patch.object(plugin, "_save"):
+            selection = "dlc:Legacy of the Forge"
+            asyncio.run(plugin.set_game_view_settings("42", "all", "date", selection))
+            self.assertEqual(asyncio.run(plugin.get_game_view_settings("42"))["contentFilter"], selection)
+            with self.assertRaises(ValueError):
+                asyncio.run(plugin.set_game_view_settings("42", "all", "date", "dlc:"))
+
     def test_original_mythic_and_addon_choices_persist_separately(self):
         with tempfile.TemporaryDirectory() as directory:
             settings_file = Path(directory) / "settings.json"

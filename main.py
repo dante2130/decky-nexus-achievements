@@ -124,6 +124,15 @@ def valid_achievement_filter(value):
         return False
 
 
+def valid_content_filter(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    return value in ("all", "original", "addon") or (
+        value.startswith("dlc:") and 4 < len(value) <= 204 and value[4:].isprintable()
+        and bool(value[4:].strip())
+    )
+
+
 def valid_title_id(title_id: Any) -> bool:
     return isinstance(title_id, str) and bool(TITLE_ID_RE.match(title_id)) and ".." not in title_id
 
@@ -587,7 +596,7 @@ class Plugin:
             "filter": legacy if legacy in ("all", "unlocked", "locked") else "all",
             "sort": value.get("sort") if value.get("sort") in ("name", "gamerscore", "date", "rarity") else "date",
             "sortDirection": value.get("sortDirection") if value.get("sortDirection") in ("asc", "desc") else ("asc" if value.get("sort") == "name" else "desc"),
-            "contentFilter": value.get("contentFilter") if value.get("contentFilter") in ("all", "original", "addon") else "all",
+            "contentFilter": value["contentFilter"] if valid_content_filter(value.get("contentFilter")) else "all",
         }
 
     async def set_game_view_settings(self, title_id: str, filter_value: str, sort_value: str, content_filter: str = "all", sort_direction: str = "", ta_filter: str = "all") -> Dict[str, str]:
@@ -601,7 +610,7 @@ class Plugin:
             filter_value = "all"
         if (not valid_achievement_filter(ta_filter) or ta_filter in ("locked", "unlocked")
                 or filter_value not in ("all", "locked", "unlocked") or sort_value not in ("name", "gamerscore", "date", "rarity")
-                or content_filter not in ("all", "original", "addon") or sort_direction not in ("asc", "desc")):
+                or not valid_content_filter(content_filter) or sort_direction not in ("asc", "desc")):
             raise ValueError("Invalid game view settings.")
         value = {"filter": filter_value, "sort": sort_value, "contentFilter": content_filter, "sortDirection": sort_direction,
                  **({"taFilter": ta_filter} if ta_filter != "all" else {})}

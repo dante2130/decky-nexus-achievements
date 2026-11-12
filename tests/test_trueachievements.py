@@ -26,6 +26,22 @@ def detail():
 
 
 class TrueAchievementsTests(unittest.TestCase):
+    def test_named_packs_are_scoped_to_their_achievement_sections(self):
+        html = '''<h2>Base Game (Excludes DLC)</h2>
+        <ul class="ach-panels"><li><a href="/a123/first-steps-achievement">First Steps</a></li></ul>
+        <h2>Brushes with Death</h2>
+        <ul class="ach-panels"><li><a href="/a124/the-end-achievement">The End</a></li></ul>
+        <h2>Legacy of the Forge</h2>
+        <ul class="ach-panels"><li><a href="/a125/forge-achievement">The Forge</a></li></ul>
+        <h2>DLC Information</h2>
+        <ul><li><a href="/a126/other-achievement">Other</a></li></ul>'''
+        rows = ta.parse_page(html)
+        self.assertEqual([row.get("bundle") for row in rows],
+                         [None, "Brushes with Death", "Legacy of the Forge", None])
+        matched = ta.match_rows(detail()["achievements"], rows)
+        self.assertNotIn("bundle", matched["scid:1"])
+        self.assertEqual(matched["scid:2"]["bundle"], "Brushes with Death")
+
     def test_live_ta_bitmask_format_decodes_every_assigned_flag(self):
         html = '''<ul class="ach-panels"><li class="w">
           <a class="title" href="/a291813/death-incarnate-achievement#123">Death Incarnate</a>
