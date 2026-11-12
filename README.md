@@ -154,8 +154,8 @@ game closes. Unifideck also shows its own notifications for these unlocks.
 When both launchers have saved the same Xbox title, each launcher has its
 own entry and tracker preferences. The Unifideck feed includes Microsoft
 Store cover art when available. For achievement languages, rarity, and Mythic,
-the plugin can use a compatible Nexus helper when the Unifideck backend lacks
-those features and both backends report the same Xbox account. Profile Gamerscore
+the plugin can use a compatible Nexus helper with Unifideck's existing Xbox
+session when the Unifideck backend lacks those features. Profile Gamerscore
 prefers the Nexus helper and uses Unifideck when no Nexus helper is installed.
 
 ## Configuration
