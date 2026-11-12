@@ -63,28 +63,33 @@ class UnifideckTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(env["XODUS_CREDENTIAL_DIR"], str(self.root / "credentials"))
         self.assertEqual(result["achievements"][0]["name"], "Erste")
 
-    async def test_enrichment_fallback_requires_the_same_xbox_account(self):
+    async def test_enrichment_fallback_uses_unifidecks_session(self):
         detail = {"ok": True, "titleId": "unifideck.42",
                   "achievements": [{"id": "scid:1", "name": "First"}]}
         response = {"schema": 1, "titleId": "42", "account": "same@example.invalid",
                     "items": [{"id": "scid:1", "name": "Erste", "description": ""}]}
 
-        def backend(home, *, unifideck=False):
-            return (["unifideck" if unifideck else "nexus"], {})
+        binary = self.root / "backend/release/xodus-cli"
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        self.write(self.root / "active.json", {"schema": 1, "backend": {"dir": "backend/release"}})
+        nexus = self.home / ".local/share/nexus-launcher/achievement-backend/xodus-cli"
+        nexus.parent.mkdir(parents=True)
+        nexus.touch()
 
-        for helper_account in ("SAME@example.invalid", "different@example.invalid"):
+        for probe in ((0, b"--json"), OSError("Unifideck CLI failed to start")):
             run = AsyncMock(side_effect=[
-                (0, b"--json"), (0, b"--language --include-mythic"),
-                (0, b'{"username":"same@example.invalid"}'),
-                (0, json.dumps({"player": {"username": helper_account}}).encode()),
+                probe, (0, b"--language --include-mythic"),
                 (0, json.dumps(response).encode()),
             ])
-            with patch.object(achievement_language, "backend_command", backend), \
-                 patch.object(achievement_language, "run_bounded", run):
-                if helper_account.startswith("SAME"):
-                    result = await achievement_language.translate_title(self.home, detail, "de-DE")
-                    self.assertEqual(result["achievements"][0]["name"], "Erste")
-                else:
-                    with self.assertRaisesRegex(ValueError, "supporting achievement languages"):
-                        await achievement_language.translate_title(self.home, detail, "de-DE")
-                    self.assertEqual(run.await_count, 4)
+            with patch.object(achievement_language, "run_bounded", run), \
+                 patch.dict(os.environ, {"LD_LIBRARY_PATH": "/tmp/_MEI-frozen",
+                                         "PYTHONPATH": "/steam-runtime",
+                                         "XODUS_CREDENTIAL_DIR": "/other-session"}):
+                result = await achievement_language.translate_title(self.home, detail, "de-DE")
+            argv, env = run.await_args.args
+            self.assertEqual(argv[-7:], [str(nexus), "achievements", "42", "--json", "--language", "de-DE", "--include-mythic"])
+            self.assertEqual(env["XODUS_CREDENTIAL_DIR"], str(self.root / "credentials"))
+            self.assertNotIn("LD_LIBRARY_PATH", env)
+            self.assertNotIn("PYTHONPATH", env)
+            self.assertEqual(result["achievements"][0]["name"], "Erste")
