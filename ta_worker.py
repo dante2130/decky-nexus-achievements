@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from ta_session import TASession, SessionError, browser_session
+from ta_session import TASession, SessionError
 from trueachievements import TrueAchievements
 
 
@@ -24,8 +24,7 @@ async def dispatch(client, session, request):
         return result
     if action == "connect":
         try:
-            data = await browser_session()
-            result = session.connect(data)
+            result = session.connect(request.get("detail") or {})
             client.attempts.clear()
             client.refresh_after = time.time()
             return result

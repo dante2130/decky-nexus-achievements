@@ -148,6 +148,22 @@ The required backend is built in [dante2130/nexus-backend](https://github.com/da
 Install the compatible helper under the separate achievement-backend directory
 described above. This feature never awards or writes achievements on Xbox.
 
+## Unifideck Xbox PC
+
+Use this plugin alongside a Unifideck build that exports the Xbox PC
+achievement feed. Complete the Xbox PC sign-in in Unifideck, then launch an
+installed Xbox PC game. The game's first successful achievements read populates the
+library, and later reads update the list and send unlocks to this plugin.
+Unifideck checks Xbox during play (about every 90 seconds) and after the
+game closes. Unifideck also shows its own notifications for these unlocks.
+
+When both launchers have saved the same Xbox title, each launcher has its
+own entry and tracker preferences. The Unifideck feed includes Microsoft
+Store cover art when available. For achievement languages, rarity, and Mythic,
+the plugin can use a compatible Nexus helper when the Unifideck backend lacks
+those features and both backends report the same Xbox account. Profile Gamerscore
+prefers the Nexus helper and uses Unifideck when no Nexus helper is installed.
+
 ## Configuration
 
 Event file, in order of precedence:

@@ -9,7 +9,9 @@ from pathlib import Path
 from urllib.request import Request, HTTPRedirectHandler, HTTPCookieProcessor, build_opener
 from urllib.parse import urljoin, urlsplit
 
-ORIGIN = "https://www.trueachievements.com"
+from achievement_language import UNIFIDECK_TITLE_PREFIX
+from ta_bridge import ORIGIN, safe_url
+
 MAX_BYTES = 4 * 1024 * 1024
 TTL = 24 * 60 * 60
 RETRY = 15 * 60
@@ -24,12 +26,6 @@ def title_link(title_id):
     if not isinstance(title_id, str) or not re.fullmatch(r"[0-9]{1,10}", title_id):
         raise ValueError("Invalid Xbox title ID")
     return f"{ORIGIN}/deeplink/{title_id}"
-
-
-def safe_url(url):
-    parsed = urlsplit(url)
-    return (parsed.scheme == "https" and parsed.netloc == "www.trueachievements.com"
-            and not parsed.username and not parsed.password)
 
 
 class Redirects(HTTPRedirectHandler):
@@ -185,7 +181,7 @@ class TrueAchievements:
 
     def get(self, detail):
         title_id = detail.get("titleId", "")
-        link = title_link(title_id)
+        link = title_link(title_id.removeprefix(UNIFIDECK_TITLE_PREFIX))
         now = time.time()
         cache = self.memory.get(title_id)
         if cache is None:

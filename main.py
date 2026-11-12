@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 # Decky loads main.py by filename without adding the plugin directory to sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from achievement_language import LANGUAGES, translate_title, backend_command, run_bounded
-from ta_bridge import TAWorker
+from achievement_language import (
+    LANGUAGES, UNIFIDECK_TITLE_PREFIX, backend_command, run_bounded, translate_title, unifideck_root,
+)
+from ta_bridge import SessionError, TAWorker, browser_session
 from mythic import MythicTracker
 from steam_menu import shortcut_game
 
@@ -179,13 +181,36 @@ def installed_title_ids() -> set[str]:
     return {title for game in launcher_games() if (title := installed_game_title_id(game))}
 
 
+def unifideck_games() -> list[dict]:
+    root = unifideck_root(user_home())
+    registry = _read_json(root.parent / "shortcuts_registry.json") or {}
+    games = []
+    for path in (root / "installed").glob("*.json"):
+        record = _read_json(path)
+        if not record or record.get("state") != "installed" or record.get("productId") != path.stem:
+            continue
+        title = record.get("titleId")
+        if not isinstance(title, str) or not re.fullmatch(r"[0-9a-fA-F]{1,8}", title) or int(title, 16) == 0:
+            continue
+        game_id = _str(record.get("storeGameId")) or path.stem
+        shortcut = registry.get(f"microsoft:{game_id}")
+        shortcut = shortcut if isinstance(shortcut, dict) else {}
+        games.append({"titleId": f"{UNIFIDECK_TITLE_PREFIX}{int(title, 16)}",
+                      "titleName": _str(shortcut.get("title")) or path.stem,
+                      "appId": shortcut.get("appid_unsigned")})
+    return games
+
+
 def game_menu_target(app_id: int) -> Optional[Dict[str, Any]]:
     if type(app_id) is not int or not 0 < app_id <= 0xffffffff:
         return None
     game = shortcut_game(user_home(), app_id, launcher_games())
     title_id = installed_game_title_id(game) if game else ""
     if not title_id:
-        return None
+        target = next((entry for entry in unifideck_games() if entry["appId"] == app_id), None)
+        if target is None:
+            return None
+        return next((title for title in list_titles()["titles"] if title["titleId"] == target["titleId"]), target)
     summary = next((title for title in list_titles()["titles"] if title["titleId"] == title_id), None)
     return summary or {"titleId": title_id, "titleName": _str(game.get("title")) or title_id,
                        "coverUrl": _str(game.get("coverUrl"))}
@@ -193,11 +218,15 @@ def game_menu_target(app_id: int) -> Optional[Dict[str, Any]]:
 
 def list_titles() -> Dict[str, Any]:
     data = _read_json(resolve_achievements_dir() / "index.json")
-    if data is None or not isinstance(data.get("titles"), list):
-        return {"ok": True, "titles": []}
+    snapshots = data["titles"][:MAX_TITLES] if data and isinstance(data.get("titles"), list) else []
     titles = []
-    installed = installed_title_ids()
-    for t in data["titles"][:MAX_TITLES]:
+    installed = installed_title_ids() | {game["titleId"] for game in unifideck_games()}
+    directory = unifideck_root(user_home()) / "achievements"
+    for path in list(directory.glob(f"{UNIFIDECK_TITLE_PREFIX}*.json"))[:MAX_TITLES]:
+        snapshot = _read_json(path)
+        if snapshot and snapshot.get("titleId") == path.stem:
+            snapshots.append(snapshot)
+    for t in snapshots:
         if not isinstance(t, dict) or not valid_title_id(t.get("titleId")):
             continue
         titles.append({
@@ -215,23 +244,28 @@ def list_titles() -> Dict[str, Any]:
 
 
 def get_running_title() -> Optional[Dict[str, Any]]:
-    data = _read_json(resolve_achievements_dir() / "running.json")
-    if not data or not valid_title_id(data.get("titleId")):
-        return None
-    pid = data.get("launcherPid")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return None
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return None
-    return next((title for title in list_titles()["titles"] if title["titleId"] == data["titleId"]), None)
+    for directory in (resolve_achievements_dir(), unifideck_root(user_home()) / "achievements"):
+        data = _read_json(directory / "running.json")
+        if not data or not valid_title_id(data.get("titleId")):
+            continue
+        pid = data.get("launcherPid")
+        if type(pid) is not int or pid <= 0:
+            continue
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            continue
+        title = next((title for title in list_titles()["titles"] if title["titleId"] == data["titleId"]), None)
+        if title:
+            return title
+    return None
 
 
 def get_title(title_id: Any) -> Dict[str, Any]:
     if not valid_title_id(title_id):
         return {"ok": False, "error": "invalid titleId", "achievements": []}
-    base = resolve_achievements_dir()
+    base = (unifideck_root(user_home()) / "achievements"
+            if title_id.startswith(UNIFIDECK_TITLE_PREFIX) else resolve_achievements_dir())
     path = base / f"{title_id}.json"
     try:
         if path.resolve().parent != base.resolve():
@@ -383,12 +417,14 @@ class Plugin:
             for item in detail.get("achievements", [])]}
 
     async def _read_tracker_progress(self, title_id: str, detail: dict):
-        command, env = backend_command(user_home())
-        code, raw = await run_bounded([*command, "achievements", title_id, "--json"], env)
+        xbox_title_id = title_id.removeprefix(UNIFIDECK_TITLE_PREFIX)
+        command, env = (backend_command(user_home(), unifideck=True)
+                        if xbox_title_id != title_id else backend_command(user_home()))
+        code, raw = await run_bounded([*command, "achievements", xbox_title_id, "--json"], env)
         if code:
             return
         data = json.loads(raw)
-        if not isinstance(data, dict) or data.get("schema") != 1 or str(data.get("titleId")) != title_id or not isinstance(data.get("items"), list):
+        if not isinstance(data, dict) or data.get("schema") != 1 or str(data.get("titleId")) != xbox_title_id or not isinstance(data.get("items"), list):
             return
         known = {item["id"] for item in detail.get("achievements", [])}
         updates = {}
@@ -659,7 +695,11 @@ class Plugin:
         return await self._ta_call("status")
 
     async def connect_ta_session(self) -> Dict[str, Any]:
-        return await self._ta_call("connect")
+        try:
+            data = await browser_session()
+        except SessionError as error:
+            return {**await self.get_ta_session(), "error": str(error)}
+        return await self._ta_call("connect", data)
 
     async def disconnect_ta_session(self) -> Dict[str, Any]:
         return await self._ta_call("disconnect")
@@ -943,23 +983,29 @@ class Plugin:
     async def _localized_notification(self, event: dict) -> dict:
         language = self.settings.get("achievement_language", "")
         title_id = event.get("titleId", "")
-        if not language or not valid_title_id(title_id):
+        if not valid_title_id(title_id):
+            return event
+        unifideck = title_id.startswith(UNIFIDECK_TITLE_PREFIX)
+        if not language and not unifideck:
             return event
         keys = [event.get("id"), f"{event.get('scid', '')}:{event.get('id', '')}"]
-        text = getattr(self, "_localized_titles", {}).get((language, title_id), {})
-        if not any(key in text for key in keys):
+        text = getattr(self, "_localized_titles", {}).get((language, title_id), {}) if language else {}
+        metadata = getattr(self, "_achievement_metadata", {}).get(title_id, {}) if unifideck else {}
+        if (language and not any(key in text for key in keys)) or (unifideck and not metadata):
             await self.get_title_achievements(title_id)
-            text = getattr(self, "_localized_titles", {}).get((language, title_id), {})
-        for key in keys:
-            if key in text:
-                return {**event, **text[key]}
-        return event
+            text = getattr(self, "_localized_titles", {}).get((language, title_id), {}) if language else {}
+            metadata = getattr(self, "_achievement_metadata", {}).get(title_id, {}) if unifideck else {}
+        translation = next((text[key] for key in keys if key in text), {})
+        rarity = next((metadata[key]["rarity"] for key in keys if "rarity" in metadata.get(key, {})), None)
+        return {**event, **translation, **({"rarity": rarity} if rarity else {})}
 
     async def _watch(self):
-        tailer = Tailer(resolve_events_path(self.settings["events_path"]))
+        paths = (resolve_events_path(self.settings["events_path"]),
+                 unifideck_root(user_home()) / "achievements/achievement-events.jsonl")
+        tailers = [Tailer(path) for path in dict.fromkeys(paths)]
         while True:
             try:
-                for event in tailer.poll():
+                for event in (event for tailer in tailers for event in tailer.poll()):
                     if self.settings["enabled"]:
                         await decky.emit("achievement", await self._localized_notification(event))
                         self._schedule_mythic_refresh(event.get("titleId", ""))
