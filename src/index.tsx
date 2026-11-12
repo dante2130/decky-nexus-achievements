@@ -107,7 +107,7 @@ interface TitleSummary {
   updatedAt: number;
 }
 
-interface TAAchievement { url: string; flags: string[]; missable?: boolean; }
+interface TAAchievement { url: string; flags: string[]; missable?: boolean; bundle?: string; }
 interface TAMetadata { url?: string; status: "ready" | "stale" | "unavailable"; achievements: Record<string, TAAchievement>; }
 const getTrueAchievements = callable<[string], TAMetadata>("get_trueachievements");
 
@@ -611,7 +611,7 @@ function AchievementRow({ a, ta, reveal, onToggle, onFlag, favorite = false, tra
             <TAIcon size={14} />{t(flag.label as Message)}
           </DialogButton>)}
         </Focusable>}
-        {a.baseGame === false && <div style={{ fontSize: 11, opacity: 0.7 }}>{t("Add-on")}</div>}
+        {(ta?.bundle || a.baseGame === false) && <div style={{ fontSize: 11, opacity: 0.7 }}>{ta?.bundle || t("Add-on")}</div>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
         <div style={{ fontWeight: "bold", whiteSpace: "nowrap" }}><GamerscoreIcon /> {hidden ? "?" : a.gamerscore}</div>
@@ -825,10 +825,22 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
 
   const availableFlags = useMemo(() => flagsForGame(detail?.achievements ?? [], ta?.achievements ?? {}), [detail, ta]);
   const selectedTAFilter = availableFlags.some(flag => `ta:${flag.id}` === taFilter) ? taFilter : "all";
+  const bundles = [...new Set((detail?.achievements ?? [])
+    .map(a => ta?.achievements[a.id]?.bundle).filter((name): name is string => !!name))]
+    .sort((a, b) => a.localeCompare(b, pluginLocales[locale]));
+  const hasUnnamedAddons = detail?.achievements.some(a =>
+    matchesAchievementSet(a, "addon", ta?.achievements[a.id]?.bundle));
+  const achievementSets = [
+    ...ACHIEVEMENT_SETS.filter(option => option.data !== "addon" || hasUnnamedAddons)
+      .map(option => ({ ...option, label: t(option.label as Message) })),
+    ...bundles.map(name => ({ data: `dlc:${name}`, label: name })),
+  ];
+  const selectedSet = achievementSets.some(option => option.data === contentFilter)
+    ? contentFilter : hasUnnamedAddons ? "addon" : "all";
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = (detail?.achievements ?? []).filter(a => {
-      if (!matchesAchievementSet(a, contentFilter)) return false;
+      if (!matchesAchievementSet(a, selectedSet, ta?.achievements[a.id]?.bundle)) return false;
       if (filter === "unlocked" && !a.unlocked) return false;
       if (filter === "locked" && a.unlocked) return false;
       if (!matchesTAFlag(ta?.achievements[a.id], selectedTAFilter)) return false;
@@ -837,8 +849,9 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
       return !hidden && (a.name.toLowerCase().includes(q) || a.description.toLowerCase().includes(q));
     });
     return list.sort((x, y) => compareAchievements(x, y, sort, sortDirection));
-  }, [detail, filter, sort, sortDirection, query, reveal, overrides, contentFilter, ta, selectedTAFilter]);
-  const membershipPending = contentFilter !== "all" && detail?.ok && !detail.mythic && !detail.mythicUnavailable;
+  }, [detail, filter, sort, sortDirection, query, reveal, overrides, selectedSet, ta, selectedTAFilter]);
+  const membershipPending = (selectedSet === "original" || selectedSet === "addon")
+    && detail?.ok && !detail.mythic && !detail.mythicUnavailable;
 
   const pinnedIds = new Set(preferences.tracked);
   const pinned = rows.filter(item => !item.unlocked && pinnedIds.has(item.id));
@@ -922,10 +935,10 @@ function TitleView({ title, tick }: { title: TitleSummary; tick: number }) {
           <Dropdown rgOptions={[{ data: "all", label: t("All") }, ...availableFlags.map(flag => ({ data: `ta:${flag.id}`, label: t(flag.label as Message) }))]}
             selectedOption={selectedTAFilter} onChange={option => updateView({ taFilter: option.data })} />
         </Field>}
-        <Field bottomSeparator="none" label={t("Achievement set")} childrenContainerWidth="min" verticalAlignment="center">
-          <Dropdown rgOptions={ACHIEVEMENT_SETS.map(option => ({ ...option, label: t(option.label as Message) }))}
-            selectedOption={contentFilter} onChange={option => updateView({ contentFilter: option.data as AchievementSet })} />
-        </Field>
+        {(hasUnnamedAddons || bundles.length > 0) && <Field bottomSeparator="none" label={t("Achievement set")} childrenContainerWidth="min" verticalAlignment="center">
+          <Dropdown rgOptions={achievementSets}
+            selectedOption={selectedSet} onChange={option => updateView({ contentFilter: option.data as AchievementSet })} />
+        </Field>}
         <Field bottomSeparator="none" label={t("Sort by")} childrenContainerWidth="min" verticalAlignment="center">
           <Focusable flow-children="row" className="nexus-sort-controls" style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {(["asc", "desc"] as const).map(direction => <DialogButton key={direction}

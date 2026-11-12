@@ -103,11 +103,32 @@ def achievement_link(node):
     return None
 
 
+def dlc_heading(node, in_packs):
+    name = " ".join(node.text().split())
+    if node.tag == "h1" or not name or len(name) > 200 or not name.isprintable():
+        return None
+    if normalized(name) in {"base game", "base game (excludes dlc)", "dlc information"}:
+        return None
+    links = (urljoin(ORIGIN, child.attrs.get("href") or "") for child in node.nodes() if child.tag == "a")
+    if in_packs or any(safe_url(link) and urlsplit(link).path.startswith("/dlc/") for link in links):
+        return name
+    return None
+
+
 def parse_page(html):
     page = Page()
     page.feed(html)
     rows = {}
+    bundle = None
+    in_packs = False
     for container in page.root.nodes():
+        if container.tag in {"h1", "h2"}:
+            name = normalized(container.text())
+            if name in {"base game", "base game (excludes dlc)"}:
+                in_packs = True
+            elif container.tag == "h1" or name == "dlc information":
+                in_packs = False
+            bundle = dlc_heading(container, in_packs)
         classes = (container.attrs.get("class") or "").lower().split()
         if container.tag != "li" and not any(c in {"achievement", "ach-panel", "achievement-panel"} for c in classes):
             continue
@@ -132,9 +153,13 @@ def parse_page(html):
                 for flag in FLAGS:
                     if label == flag["label"] or label.startswith(flag["label"] + " - "):
                         found.add(flag["id"])
-        found.update(rows.get(url, {}).get("flags", []))
+        previous = rows.get(url, {})
+        found.update(previous.get("flags", []))
         flags = [flag["id"] for flag in FLAGS if flag["id"] in found]
         rows[url] = {"name": names[0], "url": url, "flags": flags, "missable": "missable" in flags}
+        pack = previous.get("bundle") or bundle
+        if pack:
+            rows[url]["bundle"] = pack
     if not rows:
         raise ValueError("TA achievement list unavailable")
     return list(rows.values())
@@ -155,11 +180,13 @@ def match_rows(achievements, rows):
         if key and local_names[key] == 1 and len(candidates) == 1:
             row = candidates[0]
             matched[item["id"]] = {"url": row["url"], "flags": row["flags"], "missable": "missable" in row["flags"]}
+            if row.get("bundle"):
+                matched[item["id"]]["bundle"] = row["bundle"]
     return matched
 
 
 def valid_cache(cache, title_id):
-    if not isinstance(cache, dict) or cache.get("titleId") != title_id or cache.get("schema") != 2 or not isinstance(cache.get("rows"), list):
+    if not isinstance(cache, dict) or cache.get("titleId") != title_id or cache.get("schema") not in (2, 3) or not isinstance(cache.get("rows"), list):
         return False
     stamp = cache.get("updatedAt")
     if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not math.isfinite(stamp):
@@ -168,6 +195,7 @@ def valid_cache(cache, title_id):
                and isinstance(row.get("url"), str) and safe_url(row["url"])
                and re.fullmatch(r"/a[0-9]+/[^/]+-achievement", urlsplit(row["url"]).path)
                and isinstance(row.get("flags"), list) and all(isinstance(flag, str) and flag in FLAG_IDS for flag in row["flags"])
+               and ("bundle" not in row or isinstance(row["bundle"], str) and 0 < len(row["bundle"]) <= 200)
                and isinstance(row.get("missable"), bool) for row in cache["rows"])
 
 
@@ -192,7 +220,7 @@ class TrueAchievements:
             except (OSError, ValueError):
                 cache = None
         failed = False
-        if (not cache or now - cache.get("updatedAt", 0) >= TTL or cache.get("updatedAt", 0) < self.refresh_after) and now - self.attempts.get(title_id, 0) >= RETRY:
+        if (not cache or cache["schema"] == 2 or now - cache.get("updatedAt", 0) >= TTL or cache.get("updatedAt", 0) < self.refresh_after) and now - self.attempts.get(title_id, 0) >= RETRY:
             if len(self.attempts) >= 200:
                 self.attempts.pop(next(iter(self.attempts)))
             self.attempts[title_id] = now
@@ -201,7 +229,7 @@ class TrueAchievements:
                 # A redirect to a generic page must not attach unrelated metadata.
                 if not match_rows(detail.get("achievements", []), rows):
                     raise ValueError("No matching TA achievements")
-                cache = {"schema": 2, "titleId": title_id, "updatedAt": now, "rows": rows}
+                cache = {"schema": 3, "titleId": title_id, "updatedAt": now, "rows": rows}
                 self.directory.mkdir(parents=True, exist_ok=True)
                 path = self.directory / f"{title_id}.json"
                 temporary = path.with_suffix(".tmp")
