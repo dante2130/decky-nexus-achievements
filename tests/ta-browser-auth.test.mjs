@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const source = readFileSync(new URL('../ta_session.py', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../ta_bridge.py', import.meta.url), 'utf8');
 const expression = source.match(/expression = """([\s\S]*?)"""/)[1].replaceAll('\\\\', '\\');
 function authenticated(controls) {
   const result = vm.runInNewContext(expression, { location: { origin: 'https://www.trueachievements.com' },
