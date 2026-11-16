@@ -64,7 +64,7 @@ function ProfileScore({ icon, onOpen, nativeNavigation = true }: { icon: ReactNo
   const value = useProfileGamerscore();
   const locale = useSyncExternalStore(subscribeLanguage, getPluginLanguage);
   if (!value.enabled || value.score === null) return null;
-  const score = new Intl.NumberFormat(pluginLocales[locale]).format(value.score);
+  const score = new Intl.NumberFormat(pluginLocales[locale], { useGrouping: false }).format(value.score);
   const className = [headerButtonClasses?.HeaderItem, headerButtonClasses?.Clickable, "nexus-profile-gamerscore",
     controllerFocus && "nexus-profile-controller-focus"].filter(Boolean).join(" ");
   const style = { display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0, whiteSpace: "nowrap" as const,
