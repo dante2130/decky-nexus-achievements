@@ -21,7 +21,7 @@ import {
   staticClasses,
 } from "@decky/ui";
 import { addEventListener, callable, definePlugin, removeEventListener, routerHook, toaster, openFilePicker, FileSelectionType } from "@decky/api";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { FaEye, FaEyeSlash, FaPlay, FaTrophy, FaSignInAlt, FaLink, FaUnlink, FaExternalLinkAlt, FaSpinner, FaStar, FaRegStar, FaThumbtack } from "react-icons/fa";
 import { fitNotificationPopup } from "./notification-popup";
 import { NotificationAudio, observePopupSound, shouldSuppressNexusSound, type PopupPlayback, type SoundFiles } from "./notification-audio";
@@ -344,14 +344,17 @@ type NotificationPlayback = PopupPlayback;
 const toastWindowClasses = findClassModule((value: any) => value.GamepadToastPlaceholder && value.GamepadToastPopup) as { GamepadToastPlaceholder: string } | undefined;
 
 function usePopupSound(ref: { current: HTMLDivElement | null }, playback?: NotificationPlayback) {
-  useEffect(() => {
+  useLayoutEffect(() => {
     const popup = ref.current?.closest<HTMLElement>(".DeckyGamepadUIPopupToast");
     if (!popup || !toastWindowClasses) return;
+    const selector = `.${toastWindowClasses.GamepadToastPlaceholder}`;
+    const embeddedPlaceholder = popup.closest<HTMLElement>(selector);
+    if (embeddedPlaceholder) return fitNotificationPopup(popup, embeddedPlaceholder);
     const store = (window as any).SteamUIStore?.WindowStore;
     const instances = [store?.GamepadUIMainWindowInstance, ...(store?.SteamUIWindows || [])];
     for (const instance of instances) {
       const doc = instance?.BrowserWindow?.window?.document as Document | undefined;
-      const placeholder = doc?.querySelector<HTMLElement>(`.${toastWindowClasses.GamepadToastPlaceholder}`);
+      const placeholder = doc?.querySelector<HTMLElement>(selector);
       if (placeholder) return fitNotificationPopup(popup, placeholder);
     }
     return undefined;
@@ -417,7 +420,7 @@ function NotificationIcon({ url, mythic = false, rare = false, playback }: { url
   </div>;
 }
 
-async function showAchievement(event: AchievementEvent) {
+async function showAchievement(event: AchievementEvent, isActive: () => boolean) {
   if (!event.preview) {
     refreshProfileGamerscore();
     invalidateGameMenuCache();
@@ -441,6 +444,7 @@ async function showAchievement(event: AchievementEvent) {
   </div>;
   const kind = rare ? "rare" : "normal";
   const soundLength = await notificationAudio.duration(kind).catch(() => 0);
+  if (!isActive()) return;
   const logo = <NotificationIcon url={event.iconUrl} rare={rare} playback={{ kind, played: false }} />;
   toaster.toast({
     className: "nexus-achievement-notification",
@@ -454,8 +458,9 @@ async function showAchievement(event: AchievementEvent) {
   });
 }
 
-async function showMythic(event: MythicEvent) {
+async function showMythic(event: MythicEvent, isActive: () => boolean) {
   const soundLength = await notificationAudio.duration("mythic").catch(() => 0);
+  if (!isActive()) return;
   if (!event.preview) {
     refreshProfileGamerscore();
     mythicByTitle.set(event.titleId, event.mythic);
@@ -1403,15 +1408,32 @@ export default definePlugin(() => {
   const soundPatch = store?.PlayNotificationSound ? replacePatch(store, "PlayNotificationSound", args =>
     shouldSuppressNexusSound(args[0]) ? undefined : callOriginal) : undefined;
   void initializeSystemLanguage(() => window.SteamClient.Settings.GetCurrentLanguage());
-  getSettings().then(s => { setGameMenuEnabled(s.game_menu_button ?? true); setProfileGamerscoreEnabled(s.profile_gamerscore ?? false); currentDuration = s.duration; notificationDurations = s.notification_durations || {}; notificationAudio.configure(s.notification_sounds, s.notification_sound_durations); setPluginLanguage(s.plugin_language || "system"); applyRememberGameView(s.remember_game_view_settings ?? true); }).catch(() => {});
+  let disposed = false;
+  const isActive = () => !disposed;
+  const settingsReady = getSettings().then(s => {
+    if (disposed) return;
+    setGameMenuEnabled(s.game_menu_button ?? true);
+    setProfileGamerscoreEnabled(s.profile_gamerscore ?? false);
+    currentDuration = s.duration;
+    notificationDurations = s.notification_durations || {};
+    notificationAudio.configure(s.notification_sounds, s.notification_sound_durations);
+    setPluginLanguage(s.plugin_language || "system");
+    applyRememberGameView(s.remember_game_view_settings ?? true);
+  }).catch(() => {});
   routerHook.addRoute(ROUTE, AchievementsPage, { exact: true });
-  const listener = addEventListener<[AchievementEvent]>("achievement", event => { void refreshTrackerState(true); void showAchievement(event); });
-  const mythicListener = addEventListener<[MythicEvent]>("mythic", showMythic);
-  let progressDisposed = false;
+  const listener = addEventListener<[AchievementEvent]>("achievement", async event => {
+    void refreshTrackerState(true);
+    await settingsReady;
+    if (!disposed) await showAchievement(event, isActive);
+  });
+  const mythicListener = addEventListener<[MythicEvent]>("mythic", async event => {
+    await settingsReady;
+    if (!disposed) await showMythic(event, isActive);
+  });
   const refreshMythicProgress = async () => {
     try {
       const progress = await getMythicProgress();
-      if (progressDisposed) return;
+      if (disposed) return;
       let changed = false;
       for (const [id, mythic] of Object.entries(progress)) {
         if (JSON.stringify(mythicByTitle.get(id)) === JSON.stringify(mythic)) continue;
@@ -1430,9 +1452,9 @@ export default definePlugin(() => {
     content: <Content />,
     icon: <FaTrophy />,
     onDismount() {
+      disposed = true;
       routerHook.removeGlobalComponent("NexusAchievementTracker");
       stopTracking();
-      progressDisposed = true;
       clearInterval(mythicProgressTimer);
       removeProfileGamerscore();
       removeGameMenuButtons();
