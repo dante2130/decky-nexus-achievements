@@ -30,6 +30,7 @@ import { installGameMenuButtons, invalidateGameMenuCache, setGameMenuEnabled, sa
 import { RareIcon, MythicIcon, TAIcon } from "./achievement-icons";
 import { compareAchievements, type AchievementSort, type SortDirection } from "./achievement-sorting";
 import { SessionCache } from "./cache";
+import { uniqueGames } from "./game-list";
 import { taFlags, matchesTAFlag, flagsForGame } from "./ta-flags";
 import { matchesAchievementSet, type AchievementSet } from "./achievement-filters";
 import { getPluginLanguage, getPluginLanguagePreference, initializeSystemLanguage, setPluginLanguage, subscribeLanguage, translate, translateError, pluginLanguages, pluginLocales, type Message } from "./i18n";
@@ -1106,12 +1107,12 @@ function AchievementsPage() {
   const title = titles?.find(t => t.titleId === selected)
     ?? (runningTitle?.titleId === selected ? runningTitle : undefined)
     ?? (requestedGame?.titleId === selected ? requestedGame : undefined);
+  const listedTitles = useMemo(() => uniqueGames(titles ?? [], runningTitle?.titleId), [titles, runningTitle?.titleId]);
   const matchingTitles = useMemo(() => {
     const query = gameQuery.trim().toLocaleLowerCase();
-    return titles?.filter(item => item.titleId !== runningTitle?.titleId
-      && (!installedOnly || item.installed === true)
-      && item.titleName.toLocaleLowerCase().includes(query)) ?? [];
-  }, [titles, gameQuery, installedOnly, runningTitle?.titleId]);
+    return listedTitles.filter(item => (!installedOnly || item.installed === true)
+      && item.titleName.toLocaleLowerCase().includes(query));
+  }, [listedTitles, gameQuery, installedOnly]);
 
   return (
     <Focusable ref={pageRef} tabIndex={0} noFocusRing flow-children="column" navEntryPreferPosition={NavEntryPositionPreferences.FIRST} preferredFocus
@@ -1151,7 +1152,7 @@ function AchievementsPage() {
           {titles && titles.length === 0 && !runningTitle && !error && (
             <div style={{ opacity: 0.7 }}>{t("No achievements yet. Play a Nexus game to start unlocking.")}</div>
           )}
-          {titles?.some(item => item.titleId !== runningTitle?.titleId) && matchingTitles.length === 0 && !error && (
+          {listedTitles.length > 0 && matchingTitles.length === 0 && !error && (
             <div style={{ padding: "12px 0", opacity: 0.7 }}>{t("No games match these filters.")}</div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
