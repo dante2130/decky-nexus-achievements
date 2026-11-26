@@ -9,6 +9,7 @@ import {
   Field,
   Focusable,
   GamepadButton,
+  ModalRoot,
   gamepadDialogClasses,
   gamepadSliderClasses,
   Navigation,
@@ -16,6 +17,8 @@ import {
   PanelSection,
   PanelSectionRow,
   SliderField,
+  showModal,
+  type ShowModalResult,
   TextField,
   ToggleField,
   staticClasses,
@@ -27,6 +30,7 @@ import { fitNotificationPopup } from "./notification-popup";
 import { NotificationAudio, observePopupSound, shouldSuppressNexusSound, type PopupPlayback, type SoundFiles } from "./notification-audio";
 import { installProfileGamerscore, setProfileGamerscoreEnabled, saveProfileGamerscore, useProfileGamerscore, refreshProfileGamerscore } from "./profile-gamerscore";
 import { installGameMenuButtons, invalidateGameMenuCache, setGameMenuEnabled, saveGameMenuButton, type MenuTarget } from "./game-menu";
+import { installSteamMainMenuEntry } from "./steam-main-menu";
 import { RareIcon, MythicIcon, TAIcon } from "./achievement-icons";
 import { compareAchievements, type AchievementSort, type SortDirection } from "./achievement-sorting";
 import { SessionCache } from "./cache";
@@ -318,6 +322,7 @@ function AchievementLanguageSelector({ onChange }: { onChange?: () => void }) {
 }
 
 const ROUTE = "/nexus-achievements";
+const STEAM_MENU_ROUTE = "/nexus-achievements-popup";
 let requestedTitle: string | null = null;
 let requestedGame: TitleSummary | null = null;
 let requestedHideAllTitles = false;
@@ -1047,7 +1052,7 @@ function TitleRow({ title, onSelect, playing = false, showPlayingText = false, f
 const saveInstalledGamesOnly = callable<[boolean], boolean>("set_installed_games_only");
 let installedGamesOnly = false;
 
-function AchievementsPage() {
+function AchievementsPage({ closePopup }: { closePopup?: () => void } = {}) {
   const { locale, t } = usePluginTranslation();
   const [titles, setTitles] = useState<TitleSummary[] | null>(() => gamesCache.peek("titles") ?? null);
   const runningTitle = useRunningTitle();
@@ -1064,9 +1069,14 @@ function AchievementsPage() {
     }).catch(() => {});
   }, []);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState<string | null>(() => { const title = requestedTitle; requestedTitle = null; return title; });
+  const [selected, setSelected] = useState<string | null>(() => {
+    if (closePopup) return null;
+    const title = requestedTitle;
+    requestedTitle = null;
+    return title;
+  });
   const pageRef = useRef<HTMLDivElement>(null);
-  const [hideAllTitles, setHideAllTitles] = useState(requestedHideAllTitles);
+  const [hideAllTitles, setHideAllTitles] = useState(() => selected !== null && requestedHideAllTitles);
   const selectTitle = (id: string) => { setHideAllTitles(false); setSelected(id); };
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -1090,11 +1100,15 @@ function AchievementsPage() {
 
   useEffect(() => {
     // Snapshots are written by the host around the time the event arrives.
-    routerHook.addRoute(ROUTE, AchievementsPage, { exact: true });
-  const listener = addEventListener<[AchievementEvent]>("achievement", () => {
-      setTimeout(() => setTick(t => t + 1), 1500);
+    let timer: ReturnType<typeof setTimeout>;
+    const listener = addEventListener<[AchievementEvent]>("achievement", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setTick(t => t + 1), 1500);
     });
-    return () => removeEventListener("achievement", listener);
+    return () => {
+      clearTimeout(timer);
+      removeEventListener("achievement", listener);
+    };
   }, []);
 
   useEffect(() => {
@@ -1126,6 +1140,7 @@ function AchievementsPage() {
         event.preventDefault();
         event.stopPropagation();
         if (title && !hideAllTitles) setSelected(null);
+        else if (closePopup) closePopup();
         else Navigation.NavigateBack();
       }}
       onGamepadFocus={event => {
@@ -1133,7 +1148,10 @@ function AchievementsPage() {
         if (event.target !== pageRef.current) return;
         pageRef.current?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex="0"]')?.focus({ preventScroll: true });
       }}
-      style={{ padding: "40px 24px 60px", marginTop: 40, height: "100%", overflowY: "auto", scrollPaddingBottom: 60, boxSizing: "border-box" }}>
+      style={{ ...(closePopup
+        ? { width: "100%", height: "min(680px, 75vh)", padding: "16px 20px 24px" }
+        : { padding: "40px 24px 60px", marginTop: 40, height: "100%" }),
+        overflowY: "auto", scrollPaddingBottom: 60, boxSizing: "border-box" }}>
       {title ? (
         <TitleView key={title.titleId} title={title} tick={tick} />
       ) : (
@@ -1168,6 +1186,26 @@ function AchievementsPage() {
       )}
     </Focusable>
   );
+}
+
+function AchievementsPopup({ closeModal }: { closeModal?: () => void }) {
+  return <ModalRoot closeModal={closeModal} onCancel={closeModal} bAllowFullSize modalClassName="nexus-achievements-popup">
+    <style>{`
+      .nexus-achievements-popup > .ModalPosition_Content {
+        width: 100vw;
+        max-width: 100vw;
+        box-sizing: border-box;
+      }
+      .nexus-achievements-popup .DialogContentTransition,
+      .nexus-achievements-popup .DialogContent.DialogContentFullSize,
+      .nexus-achievements-popup .DialogContentFullSize > .DialogContent_InnerWidth {
+        width: 100%;
+        max-width: none;
+        box-sizing: border-box;
+      }
+    `}</style>
+    <AchievementsPage closePopup={closeModal} />
+  </ModalRoot>;
 }
 
 function DurationLabel({ label, seconds }: { label: string; seconds: number }) {
@@ -1421,6 +1459,24 @@ export default definePlugin(() => {
     applyRememberGameView(s.remember_game_view_settings ?? true);
   }).catch(() => {});
   routerHook.addRoute(ROUTE, AchievementsPage, { exact: true });
+  let popup: ShowModalResult | undefined;
+  let popupTimer: ReturnType<typeof setTimeout> | undefined;
+  function SteamMenuPopupRoute() {
+    useEffect(() => {
+      // Return from the transient native menu route before attaching the modal.
+      Navigation.NavigateBack();
+      if (disposed || popup || popupTimer !== undefined) return;
+      popupTimer = setTimeout(() => {
+        popupTimer = undefined;
+        const opened = showModal(<AchievementsPopup />, undefined, { bNeverPopOut: true });
+        popup = opened;
+        void opened.ClosedPromise.finally(() => { if (popup === opened) popup = undefined; });
+      }, 100);
+    }, []);
+    return null;
+  }
+  routerHook.addRoute(STEAM_MENU_ROUTE, SteamMenuPopupRoute, { exact: true });
+  const removeSteamMainMenuEntry = installSteamMainMenuEntry(STEAM_MENU_ROUTE, <FaTrophy />);
   const listener = addEventListener<[AchievementEvent]>("achievement", async event => {
     void refreshTrackerState(true);
     await settingsReady;
@@ -1456,6 +1512,10 @@ export default definePlugin(() => {
       routerHook.removeGlobalComponent("NexusAchievementTracker");
       stopTracking();
       clearInterval(mythicProgressTimer);
+      removeSteamMainMenuEntry();
+      clearTimeout(popupTimer);
+      popup?.Close();
+      routerHook.removeRoute(STEAM_MENU_ROUTE);
       removeProfileGamerscore();
       removeGameMenuButtons();
       requestedGame = null;

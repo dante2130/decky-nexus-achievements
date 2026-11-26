@@ -130,12 +130,12 @@ function GameViewAchievements({ appId, icon, onOpen }: { appId: number; icon: Re
   const label = translate(locale, "View all achievements");
   let badge: ReactNode = <div className="nexus-game-view-achievements" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 5 }}>
     <style>{`
-      .nexus-game-view-achievements .nexus-game-view-score:is(.gpfocus, :focus-visible) {
+      .nexus-game-view-achievements .nexus-game-view-score:is(:hover, .gpfocus, :focus-visible) {
         background: #fff !important;
         color: #0e141b !important;
       }
-      .nexus-game-view-score:is(.gpfocus, :focus-visible) .nexus-gamerscore-icon circle { fill: #0e141b !important; }
-      .nexus-game-view-score:is(.gpfocus, :focus-visible) .nexus-gamerscore-icon path { stroke: #fff !important; }
+      .nexus-game-view-score:is(:hover, .gpfocus, :focus-visible) .nexus-gamerscore-icon circle { fill: #0e141b !important; }
+      .nexus-game-view-score:is(:hover, .gpfocus, :focus-visible) .nexus-gamerscore-icon path { stroke: #fff !important; }
     `}</style>
     <Focusable ref={scoreButton} role="button" noFocusRing className="nexus-game-view-score"
       aria-label={label} onOKActionDescription={label} onActivate={() => onOpen(target)}

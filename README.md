@@ -37,7 +37,8 @@ Malformed lines and other `type` values are ignored. The plugin starts at the en
 
 ## Achievements viewer
 
-Open the quick-access panel and press **View all achievements** to browse
+In Gaming Mode, press **STEAM** and select **Nexus Achievements** to open the viewer in a popup, even when no game is running.
+You can also open the quick-access panel and press **View all achievements** to browse
 titles and per-title achievements (filter All/Unlocked/Locked, sort, search;
 secret achievements stay hidden until unlocked; a global "Show secret achievements" toggle is persisted, and each locked secret row has its own eye-icon button (below the gamerscore) that overrides it for the current view only and resets when the global toggle changes). Data comes from snapshot files
 in `~/.local/share/nexus-launcher/achievements/` (`index.json` plus
