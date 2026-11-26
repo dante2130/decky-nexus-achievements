@@ -1,28 +1,35 @@
-import { findInReactTree, getReactRoot } from "@decky/ui";
+import { findInReactTree, getReactRoot, Menu, MenuItem, showContextMenu } from "@decky/ui";
 import { createElement, type ReactNode } from "react";
 import { getPluginLanguage, translate } from "./i18n";
 
-interface MenuEntry {
-  id: string;
-  route: string;
-  label: string;
-  icon: ReactNode;
-  order: number;
-  onSecondary?: () => void;
+const entryKey = "nexus-achievements";
+const positionKey = "NEXUS_ACHIEVEMENTS_STEAM_MENU_POSITION";
+const nativeRouteKeys = new Set(["home", "library", "store", "chat", "media", "downloads", "console", "settings", "account"]);
+
+function getPosition() {
+  try {
+    const position = Number(localStorage.getItem(positionKey) ?? 3);
+    if (Number.isInteger(position) && position >= 1 && position <= 9) return position;
+  } catch { /* Storage can be unavailable while the Steam UI starts. */ }
+  return 3;
 }
 
-// Steamcord's shared registry lets either plugin load first and own the patch.
-interface SteamMenuRegistry {
-  revision?: number;
-  entries: Map<string, MenuEntry>;
-  dispose?: () => void;
-  timer?: ReturnType<typeof setInterval>;
+function choosePosition(event?: Event) {
+  const position = getPosition();
+  const label = translate(getPluginLanguage(), "Change menu position");
+  showContextMenu(createElement(Menu, { label },
+    Array.from({ length: 9 }, (_, index) => {
+      const slot = index + 1;
+      return createElement(MenuItem, {
+        key: slot,
+        selected: slot === position,
+        onSelected: () => localStorage.setItem(positionKey, String(slot)),
+      }, String(slot));
+    }),
+  ), event?.currentTarget ?? undefined);
 }
 
-const registryKey = "__necroSteamMenuV1";
-const entryPrefix = "necro-menu:";
-
-function patchMountedMenu(registry: SteamMenuRegistry): (() => void) | undefined {
+function patchMountedMenu(route: string, icon: ReactNode, isVisible: () => boolean): (() => void) | undefined {
   const root = document.getElementById("root");
   if (!root) return;
   const menu = findInReactTree(getReactRoot(root), fiber => fiber?.memoizedProps?.navID === "MainNavMenuContainer");
@@ -33,15 +40,13 @@ function patchMountedMenu(registry: SteamMenuRegistry): (() => void) | undefined
   const rowsSeen = new Set<any[]>();
   const wrappedTypes = new WeakMap<Function, Function>();
   let active = true;
-  const isSharedEntry = (row: any) => typeof row?.key === "string" && row.key.startsWith(entryPrefix);
-  const removeSharedEntries = (rows: any[]) => {
-    for (let index = rows.length - 1; index >= 0; index--) {
-      if (isSharedEntry(rows[index])) rows.splice(index, 1);
-    }
+  const removeEntry = (rows: any[]) => {
+    const index = rows.findIndex(row => row?.key === entryKey);
+    if (index !== -1) rows.splice(index, 1);
   };
+
   function renderMenu(this: unknown, ...args: unknown[]) {
     const tree = render.apply(this, args);
-    if (!active) return tree;
     const list = tree?.props?.children?.props?.children?.[0];
     if (typeof list?.type !== "function") return tree;
     const renderList = list.type;
@@ -50,32 +55,28 @@ function patchMountedMenu(registry: SteamMenuRegistry): (() => void) | undefined
       wrapped = function (this: unknown, ...listArgs: unknown[]) {
         const output = renderList.apply(this, listArgs);
         if (!active) return output;
-        const isNativeRoute = (row: any) => !isSharedEntry(row) && row?.props?.route &&
-          row.props.label && (row.props.onGamepadFocus || row.props.onFocus);
-        const rows = findInReactTree(output, node => Array.isArray(node) && node.some(isNativeRoute));
+        const rows = findInReactTree(output, node => Array.isArray(node) && node.some(row => row?.key === "library"));
         if (!Array.isArray(rows) || Object.isFrozen(rows)) return output;
-        removeSharedEntries(rows);
-        const template = rows.find(isNativeRoute);
+        const template = rows.find(row => row?.key === "library" && row.props?.route);
         if (!template) return output;
+        removeEntry(rows);
+        if (!isVisible()) return output;
         rowsSeen.add(rows);
         if (rowsSeen.size > 32) rowsSeen.delete(rowsSeen.values().next().value!);
 
-        const routes = rows.flatMap((row, index) => isNativeRoute(row) ? [index] : []);
-        let position = 3;
-        try {
-          const saved = Number(localStorage.getItem("STEAMCORD_MENU_POSITION") ?? 3);
-          if (Number.isInteger(saved) && saved >= 1 && saved <= 9) position = saved;
-        } catch { /* Use the default menu position when storage is unavailable. */ }
-        const insertAt = (position === 9 ? undefined : routes[position - 1]) ?? routes[routes.length - 1] + 1;
-        const entries = [...registry.entries.values()].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
-        rows.splice(insertAt, 0, ...entries.map(entry => createElement(template.type, {
-          key: entryPrefix + entry.id,
-          route: entry.route,
-          label: entry.label,
-          ...(template.props.onGamepadFocus ? { onGamepadFocus: template.props.onGamepadFocus } : { onFocus: template.props.onFocus }),
-          ...(template.props.icon ? { icon: entry.icon } : { children: entry.icon }),
-          ...(entry.onSecondary ? { onSecondaryActionDescription: "Change Position", onSecondaryButton: entry.onSecondary } : {}),
-        })));
+        // Count Steam's routes so another plugin's shortcut cannot shift our slot.
+        const nativeRoutes = rows.flatMap((row, index) => nativeRouteKeys.has(row?.key) && row.props?.route ? [index] : []);
+        const position = getPosition();
+        const insertAt = (position === 9 ? undefined : nativeRoutes[position - 1]) ?? nativeRoutes[nativeRoutes.length - 1] + 1;
+        const locale = getPluginLanguage();
+        rows.splice(insertAt, 0, createElement(template.type, {
+          key: entryKey, route, icon,
+          label: translate(locale, "Nexus Achievements"),
+          onGamepadFocus: template.props.onGamepadFocus,
+          onFocus: template.props.onFocus,
+          onSecondaryActionDescription: translate(locale, "Change menu position"),
+          onSecondaryButton: choosePosition,
+        }));
         return output;
       };
       wrappedTypes.set(renderList, wrapped);
@@ -91,43 +92,26 @@ function patchMountedMenu(registry: SteamMenuRegistry): (() => void) | undefined
     active = false;
     if (parent.type === renderMenu) parent.type = render;
     if (parent.alternate?.type === renderMenu) parent.alternate.type = render;
-    rowsSeen.forEach(removeSharedEntries);
+    rowsSeen.forEach(removeEntry);
     rowsSeen.clear();
   };
 }
 
-export function installSteamMainMenuEntry(route: string, icon: ReactNode): () => void {
-  const host = window as Window & { [registryKey]?: SteamMenuRegistry };
-  const registry: SteamMenuRegistry = host[registryKey] ??= { entries: new Map() };
-  const entry: MenuEntry = {
-    id: "nexus-achievements", route, icon, order: 20,
-    get label() { return translate(getPluginLanguage(), "Nexus Achievements"); },
-  };
-  registry.revision ??= 3;
-  registry.entries.set(entry.id, entry);
-  const stopRetrying = () => {
-    clearInterval(registry.timer);
-    registry.timer = undefined;
-  };
-  if (!registry.dispose && registry.timer === undefined) {
-    let attempts = 0;
-    const tryMount = () => {
-      try {
-        registry.dispose = patchMountedMenu(registry);
-      } catch (error) {
-        console.debug("Nexus: unable to patch the mounted Steam menu.", error);
-      }
-      if (registry.dispose || ++attempts >= 30) stopRetrying();
-    };
-    registry.timer = setInterval(tryMount, 2000);
-    tryMount();
+export function installSteamMainMenuEntry(route: string, icon: ReactNode, isVisible: () => boolean): () => void {
+  let dispose: (() => void) | undefined;
+  let attempts = 0;
+  const timer = setInterval(tryMount, 2000);
+  function tryMount() {
+    try {
+      dispose = patchMountedMenu(route, icon, isVisible);
+    } catch (error) {
+      console.debug("Nexus: unable to patch the mounted Steam menu.", error);
+    }
+    if (dispose || ++attempts >= 30) clearInterval(timer);
   }
+  tryMount();
   return () => {
-    if (registry.entries.get(entry.id) !== entry) return;
-    registry.entries.delete(entry.id);
-    if (registry.entries.size) return;
-    stopRetrying();
-    registry.dispose?.();
-    registry.dispose = undefined;
+    clearInterval(timer);
+    dispose?.();
   };
 }
