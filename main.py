@@ -29,7 +29,7 @@ except ImportError:  # unit tests run outside Decky Loader
 DEFAULT_RELATIVE = ".local/share/nexus-launcher/achievement-events.jsonl"
 POLL_SECONDS = 0.5
 MAX_LINE = 64 * 1024
-DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": "", "plugin_language": "system", "group_achievements": False, "game_view_settings": {}, "remember_game_view_settings": True, "test_notification_type": "normal", "notification_sounds": {}, "notification_durations": {}, "notification_sound_durations": {}, "installed_games_only": False, "game_menu_button": True, "profile_gamerscore": False, "favorite_achievements": {}, "tracked_achievements": {}, "tracker_options": {"enabled": False, "position": "upper-right", "opacity": 75, "count": 5}}
+DEFAULT_SETTINGS = {"enabled": True, "duration": 8000, "events_path": "", "show_secrets": False, "achievement_language": "", "plugin_language": "system", "group_achievements": False, "game_view_settings": {}, "remember_game_view_settings": True, "test_notification_type": "normal", "notification_sounds": {}, "notification_durations": {}, "notification_sound_durations": {}, "installed_games_only": False, "game_menu_button": True, "steam_menu_entry": True, "profile_gamerscore": False, "favorite_achievements": {}, "tracked_achievements": {}, "tracker_options": {"enabled": False, "position": "upper-right", "opacity": 75, "count": 5}}
 
 
 AUDIO_MIMES = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".flac": "audio/flac"}
@@ -873,6 +873,16 @@ class Plugin:
             self.settings = previous
             raise
         return self.settings["game_menu_button"]
+
+    async def set_steam_menu_entry(self, enabled: bool) -> bool:
+        previous = self.settings
+        self.settings = {**previous, "steam_menu_entry": bool(enabled)}
+        try:
+            self._save()
+        except OSError:
+            self.settings = previous
+            raise
+        return self.settings["steam_menu_entry"]
 
     async def set_installed_games_only(self, enabled: bool) -> bool:
         previous = self.settings

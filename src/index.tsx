@@ -60,6 +60,7 @@ interface Settings {
   enabled: boolean;
   installed_games_only?: boolean;
   game_menu_button?: boolean;
+  steam_menu_entry?: boolean;
   profile_gamerscore?: boolean;
   duration: number;
   events_path: string;
@@ -77,6 +78,7 @@ interface Settings {
 }
 
 const getSettings = callable<[], Settings>("get_settings");
+const saveSteamMenuEntry = callable<[boolean], boolean>("set_steam_menu_entry");
 const setSettings = callable<[boolean, number, string], Settings>("set_settings");
 type NotificationKind = "normal" | "rare" | "mythic";
 let selectedNotificationKind: NotificationKind = "normal";
@@ -1216,11 +1218,13 @@ function DurationLabel({ label, seconds }: { label: string; seconds: number }) {
   </div>;
 }
 
-function Content() {
+function Content({ setSteamMenuVisible }: { setSteamMenuVisible: (visible: boolean) => void }) {
   const { t } = usePluginTranslation();
   const [settings, setLocal] = useState<Settings | null>(null);
   const [rememberError, setRememberError] = useState(false);
   const [gameMenuError, setGameMenuError] = useState(false);
+  const [steamMenuSaving, setSteamMenuSaving] = useState(false);
+  const [steamMenuError, setSteamMenuError] = useState(false);
   const [profileScoreError, setProfileScoreError] = useState(false);
   const profileScore = useProfileGamerscore();
   const [notificationKind, setNotificationKind] = useState<NotificationKind>(() => selectedNotificationKind);
@@ -1310,6 +1314,20 @@ function Content() {
         <PanelSectionRow><TrackerControls /></PanelSectionRow>
       </SettingsGroup>
       <SettingsGroup title={t("Steam integration")}>
+        <PanelSectionRow>
+          <ToggleField label={t("Show Nexus Achievements in the STEAM menu")}
+            checked={settings.steam_menu_entry ?? true} disabled={steamMenuSaving} onChange={async enabled => {
+              setSteamMenuSaving(true);
+              setSteamMenuError(false);
+              try {
+                const saved = await saveSteamMenuEntry(enabled);
+                setSteamMenuVisible(saved);
+                setLocal(previous => previous ? { ...previous, steam_menu_entry: saved } : previous);
+              } catch { setSteamMenuError(true); }
+              finally { setSteamMenuSaving(false); }
+            }} />
+          {steamMenuError && <div role="alert">{t("Could not save STEAM menu visibility.")}</div>}
+        </PanelSectionRow>
         <PanelSectionRow>
           <ToggleField label={t("Show Nexus Achievements in game menus")} description={t("Add a button to the running game menu and library page.")}
             checked={settings.game_menu_button ?? true} onChange={async enabled => {
@@ -1448,8 +1466,13 @@ export default definePlugin(() => {
   void initializeSystemLanguage(() => window.SteamClient.Settings.GetCurrentLanguage());
   let disposed = false;
   const isActive = () => !disposed;
+  let steamMenuVisible = false;
+  const setSteamMenuVisible = (visible: boolean) => {
+    if (!disposed) steamMenuVisible = visible;
+  };
   const settingsReady = getSettings().then(s => {
     if (disposed) return;
+    setSteamMenuVisible(s.steam_menu_entry ?? true);
     setGameMenuEnabled(s.game_menu_button ?? true);
     setProfileGamerscoreEnabled(s.profile_gamerscore ?? false);
     currentDuration = s.duration;
@@ -1457,7 +1480,7 @@ export default definePlugin(() => {
     notificationAudio.configure(s.notification_sounds, s.notification_sound_durations);
     setPluginLanguage(s.plugin_language || "system");
     applyRememberGameView(s.remember_game_view_settings ?? true);
-  }).catch(() => {});
+  }).catch(() => { setSteamMenuVisible(true); });
   routerHook.addRoute(ROUTE, AchievementsPage, { exact: true });
   let popup: ShowModalResult | undefined;
   let popupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1476,7 +1499,8 @@ export default definePlugin(() => {
     return null;
   }
   routerHook.addRoute(STEAM_MENU_ROUTE, SteamMenuPopupRoute, { exact: true });
-  const removeSteamMainMenuEntry = installSteamMainMenuEntry(STEAM_MENU_ROUTE, <FaTrophy />);
+  // Keep the mounted component identity stable for other Steam menu patches.
+  const removeSteamMainMenuEntry = installSteamMainMenuEntry(STEAM_MENU_ROUTE, <FaTrophy />, () => steamMenuVisible);
   const listener = addEventListener<[AchievementEvent]>("achievement", async event => {
     void refreshTrackerState(true);
     await settingsReady;
@@ -1505,7 +1529,7 @@ export default definePlugin(() => {
   return {
     name: "Nexus Achievements",
     titleView: <PluginTitle />,
-    content: <Content />,
+    content: <Content setSteamMenuVisible={setSteamMenuVisible} />,
     icon: <FaTrophy />,
     onDismount() {
       disposed = true;
